@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+.turbo/
+
+# Data
+data/
+!data/.gitkeep
+*.db
+*.db-journal
+*.wal
+*.shm
+
+# Build artifacts
+*.mp3
+*.m4b
+*.wav
+segments/
+output/
+
+# User-supplied content
+ambient/*.mp3
+ambient/*.wav
+ambient/*.ogg
+!ambient/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Source books — large, often copyrighted
+*.epub
+*.pdf
+!backend/nlp/prompts/*.md
