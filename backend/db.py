@@ -5,7 +5,7 @@ from typing import Iterator
 
 from backend.config import get_settings
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -47,21 +47,27 @@ CREATE TABLE IF NOT EXISTS chapters (
 
 CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id);
 
+-- Characters (§9.3). Column names align with §9.3 where possible; the extra
+-- fields (estimated_line_count tier, first_appearance_chapter) reflect the
+-- validated extract_cast.md prompt output shape.
 CREATE TABLE IF NOT EXISTS characters (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    aliases_json TEXT,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
     gender TEXT,
     age_estimate TEXT,
     description TEXT,
     speaking_style TEXT,
-    archetype TEXT,
+    character_archetype TEXT,
     first_appearance_chapter INTEGER,
-    estimated_line_count TEXT,
-    assigned_voice_id TEXT,
+    estimated_line_count TEXT,                      -- prompt output: main/supporting/minor/background
+    line_count INTEGER,                             -- computed post-attribution (Phase 4)
+    is_narrator INTEGER NOT NULL DEFAULT 0,
+    voice_id TEXT,                                  -- FK → voices (soft; voice may be deleted)
     engine_override TEXT,
-    notes TEXT
+    notes TEXT,
+    UNIQUE(project_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id);
@@ -128,6 +134,9 @@ CREATE TABLE IF NOT EXISTS playback_state (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Jobs (§9.8). ``kind`` == spec's ``type`` (kept for v1 compatibility).
+-- ``status``: queued / running / awaiting_response / complete / failed.
+-- ``awaiting_response`` is used by the file-drop LLM integration (§12A).
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
@@ -138,11 +147,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     payload_json TEXT,
     result_json TEXT,
     error TEXT,
+    started_at TEXT,
+    completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 """
 
 
@@ -186,6 +198,37 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 )
             conn.execute("DROP TABLE voices")
         conn.executescript(SCHEMA_SQL)
+
+    if current < 3:
+        # Phase 3 aligns `characters` column names with spec §9.3 and adds job
+        # lifecycle columns + a uniqueness constraint. No characters exist yet
+        # (nothing writes to the table before Phase 3), but abort loudly if
+        # rows are present so a future re-run on a populated DB doesn't
+        # silently misplace columns.
+        char_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM characters"
+        ).fetchone()["c"]
+        if char_count > 0:
+            raise MigrationAborted(
+                f"Refusing to migrate: `characters` table already has {char_count} row(s). "
+                "The Phase 3 rename touches column names (archetype→character_archetype, "
+                "assigned_voice_id→voice_id). Back up data/chorus.db and inspect the rows "
+                "before retrying; the migration path for populated character tables has not "
+                "been written."
+            )
+        conn.execute("DROP TABLE characters")
+        conn.executescript(SCHEMA_SQL)
+
+        # Jobs table: add new lifecycle columns in place. No risk to existing
+        # rows — ALTER ADD COLUMN is non-destructive.
+        existing_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "started_at" not in existing_cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN started_at TEXT")
+        if "completed_at" not in existing_cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN completed_at TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
 
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
