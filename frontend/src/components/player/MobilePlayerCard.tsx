@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import CoverArt from "./CoverArt";
-import SyncedTextView from "./SyncedTextView";
+import MobileTranscriptView from "./MobileTranscriptView";
 import type { SegmentTiming } from "../../lib/api";
 
 /**
@@ -170,7 +170,7 @@ export default function MobilePlayerCard({
                      rounded-2xl border border-border bg-surface"
           aria-hidden={!flipped}
         >
-          <SyncedTextView
+          <MobileTranscriptView
             timings={segmentTimings}
             currentSegmentId={currentSegmentId}
             onSeek={onSegmentSeek}
