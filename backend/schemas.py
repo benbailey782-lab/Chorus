@@ -67,6 +67,7 @@ class ChapterOut(BaseModel):
     status: ChapterStatus
     pov_character_id: Optional[str] = None
     ambient_scene_tag: Optional[str] = None
+    segment_count: int = 0
 
 
 class ChapterDetail(ChapterOut):

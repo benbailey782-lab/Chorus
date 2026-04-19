@@ -736,9 +736,9 @@ Two-pane on desktop, stacked on mobile:
 Scrollable chapter with inline editing:
 - Each segment is a tap-to-expand card
 - Color-coded left border by character
-- Confidence badge (red <70, yellow 70–89, green 90+)
+- Confidence badge (red <70, yellow 70–84, green 85+ — production feedback showed many chapters hover in the 85–89 band with correct attribution; tightening the "green" threshold to 90 flagged too much as medium-confidence and added review noise. The implementation single-sources this in `frontend/src/lib/constants.ts::CONFIDENCE`.)
 - Expand: speaker dropdown, emotion tag chips, render mode selector, "Generate preview"
-- Bulk action: "Approve all segments above 90% confidence"
+- Bulk action: "Approve all segments above 90% confidence" (deferred to Phase 5 — needs TTS to have anything to approve for)
 
 ### 15.7 The Player
 - Cover art at top (tap for full-screen)

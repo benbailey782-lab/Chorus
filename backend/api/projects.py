@@ -126,8 +126,21 @@ def list_chapters(project_id: str) -> List[ChapterOut]:
         ).fetchone()
         if not proj:
             raise HTTPException(404, "project not found")
+        # LEFT JOIN a COUNT on segments so clients (e.g., Casting > Chapters
+        # section) can show real per-chapter segment counts without N+1
+        # round-trips to GET /api/chapters/{id}.
         rows = conn.execute(
-            "SELECT * FROM chapters WHERE project_id=? ORDER BY number",
+            """
+            SELECT c.*, COALESCE(s.cnt, 0) AS segment_count
+            FROM chapters c
+            LEFT JOIN (
+                SELECT chapter_id, COUNT(*) AS cnt
+                FROM segments
+                GROUP BY chapter_id
+            ) s ON s.chapter_id = c.id
+            WHERE c.project_id = ?
+            ORDER BY c.number
+            """,
             (proj["id"],),
         ).fetchall()
     return [
@@ -141,6 +154,7 @@ def list_chapters(project_id: str) -> List[ChapterOut]:
             status=r["status"],
             pov_character_id=r["pov_character_id"],
             ambient_scene_tag=r["ambient_scene_tag"],
+            segment_count=r["segment_count"],
         )
         for r in rows
     ]

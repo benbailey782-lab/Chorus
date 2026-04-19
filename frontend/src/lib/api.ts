@@ -47,6 +47,9 @@ export interface Chapter {
   status: string;
   pov_character_id: string | null;
   ambient_scene_tag: string | null;
+  // Added in phase4-complete: list_chapters now LEFT JOINs a COUNT on
+  // segments. Optional for backwards compat with stale backends.
+  segment_count?: number;
 }
 
 export interface IngestResult {

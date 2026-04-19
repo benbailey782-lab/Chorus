@@ -15,7 +15,7 @@
 - Phase 1 (Ingestion + Library) — TXT + EPUB ingestion, naive chapter detection, Library + Project views. Claude chapter-detection fallback not yet wired.
 - Phase 2 (Voice Library) — **done in Voicebox-stub mode** (dev is on Windows, no Voicebox installed). Full CRUD + metadata + optional reference-audio upload + mobile-first dark UI at §15.8 tokens. Voicebox wiring punch-list: `docs/VOICEBOX-WIRING.md`.
 - Phase 3 (Cast Extraction + Auto-Casting) — **done via file-drop LLM integration (§12A)**. No Anthropic SDK calls; prompts written to `data/llm_queue/pending/`, responses read from `data/llm_queue/responses/`. Jobs worker reconciles them. Operator playbook: `docs/FILE-DROP-WORKFLOW.md`.
-- Phase 4 (Per-Chapter Attribution) — **backend + API complete** (schema v4, `attribute_chapter` handler, `POST /api/chapters/{id}/attribute`, `POST /api/projects/{id}/attribute-all`, `GET /api/chapters/{id}/segments`, `PATCH /api/segments/{id}`, `POST /api/segments/bulk-reassign`, `GET /api/segments/{id}/preview` → 501). **Review UI deferred** — resume at P5 (prose view) next session; see `scratch/instructions.txt` for the resume marker. Round-trip validated against AGoT BRAN via file-drop: 217 segments, mean confidence 96.9, project → `attributed`.
+- Phase 4 (Per-Chapter Attribution) — **shipped**. Backend: schema v5 (adds `segments.text_modified`), `attribute_chapter` handler, `POST /api/chapters/{id}/attribute`, `POST /api/projects/{id}/attribute-all`, `GET /api/chapters/{id}/segments`, `PATCH /api/segments/{id}` (flips `text_modified=1` on text edits), `POST /api/segments/bulk-reassign`, `GET /api/segments/{id}/preview` → 501 until Voicebox. Full review UI at `/project/:idOrSlug/chapters/:chapterId`: prose view + table view, filter drawer (speaker, confidence range, render mode, emotion/notes toggles, persisted per-chapter), detail panel with inline editing + Cmd/Ctrl+Enter save, bulk operations (reassign speaker, set render mode, add/remove emotion tags, select-all), keyboard nav (j/k, Enter, Esc, ?). Casting page gains a Chapters section with progress bar, per-chapter status chips, inline Attribute/Review/Retry, and an "Attribute all" project-level action. Round-trip validated against AGoT BRAN via file-drop: 217 segments, mean confidence 96.9, project → `attributed`.
 - Later phases per spec §17.
 
 ## Conventions
@@ -98,6 +98,15 @@ Run attribution pass on AGoT book 1 chapter-by-chapter via file-drop; manually i
   - `casting` → `attributing` when the first `attribute_chapter` job for the project hits `awaiting_response`
   - `attributing` → `attributed` when every chapter has at least one segment AND `chapter_count > 0`
 - **`line_count` on characters** is recomputed after every successful attribute_chapter ingestion. The formula is "count of dialogue-mode segments assigned to this character across the whole project."
+- **`text_modified` column** on segments. Flipped to `1` by `PATCH /api/segments/{id}` when the request body contains `text` and the new value differs from the stored value. Re-attribution of a chapter currently wipes all segments including user edits — smarter merge deferred to Phase 7.
+
+### Phase-4 frontend conventions
+
+- **Review UI route**: `/project/:idOrSlug/chapters/:chapterId` → `ChapterReview.tsx`. Two-pane desktop (prose/table left, detail panel right); bottom-sheet detail on mobile.
+- **Confidence thresholds** are single-sourced from `frontend/src/lib/constants.ts::CONFIDENCE`. Green ≥85, yellow 70–84, red <70, neutral for null. Any time you add a color-coded surface for confidence, import from there — do not hardcode thresholds.
+- **Filter persistence**: per-chapter in localStorage, key `review:filters:{chapterId}`. View mode preference under `review:view-mode`. Helpers in `frontend/src/lib/review-filters.ts`.
+- **Toast system**: minimal custom toast in `frontend/src/lib/toast.ts` + `frontend/src/components/Toast.tsx`. Wrapped at app root. Import `useToast()` to emit. Do not add a third-party toast lib.
+- **Bulk operations** that can be expressed as a single `changes` payload (speaker, render_mode) use `POST /api/segments/bulk-reassign`. Add/remove emotion tags require per-segment PATCHes because the bulk endpoint applies the same `changes` to every selected segment (would overwrite per-segment tag lists).
 
 ### Phase-3 conventions
 

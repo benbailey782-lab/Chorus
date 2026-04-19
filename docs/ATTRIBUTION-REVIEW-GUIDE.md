@@ -1,8 +1,8 @@
 # Attribution Review Guide
 
-**Status:** backend-ready; UI landing next session.
+**Status:** shipped in Phase 4.
 
-Phase 4 of Chorus adds per-chapter speaker attribution: every narrative chapter is split into ordered segments, each segment tagged with a `render_mode` and (where applicable) a `character_id`. Attribution runs via the file-drop LLM workflow (see `docs/FILE-DROP-WORKFLOW.md`); review is currently API-only while the UI is built out. This guide documents the available HTTP surface and the segment data model so operators can inspect, edit, and sanity-check attribution output via `curl` until the review UI ships.
+Phase 4 of Chorus adds per-chapter speaker attribution: every narrative chapter is split into ordered segments, each segment tagged with a `render_mode` and (where applicable) a `character_id`. Attribution runs via the file-drop LLM workflow (see `docs/FILE-DROP-WORKFLOW.md`). The operator-facing review UI ships at `/project/:idOrSlug/chapters/:chapterId` and covers prose + table views, filter drawer, detail-panel inline editing, and bulk operations. The Casting page now also surfaces a Chapters section with per-chapter status and an "Attribute all" project-level action. This guide documents both the shipped UI and the underlying HTTP surface (still intact for `curl`-based inspection).
 
 ## Segment data model
 
@@ -115,28 +115,53 @@ The AGoT BRAN round-trip benchmark: 217 segments, mean confidence 96.9.
 
 ---
 
-## Review UI — coming in next session
+## Review UI (shipped)
 
-The screens below are planned for P5–P8. Backend already supports every operation they need.
+Live at `/project/:idOrSlug/chapters/:chapterId` → `ChapterReview.tsx`. Two-pane desktop layout (prose/table on the left, detail panel on the right); the detail panel becomes a bottom-sheet on mobile. Confidence thresholds are single-sourced from `frontend/src/lib/constants.ts::CONFIDENCE` (green ≥85, yellow 70–84, red <70, neutral for null). View-mode preference persists in localStorage under `review:view-mode`.
 
-### Prose view (P5)
-Chapter text rendered top-to-bottom with per-segment coloring by speaker. Click a segment → detail panel opens. Narration and skip segments visually de-emphasized. Segment confidence surfaced as a subtle left-border tint (red → green).
+### Prose view (default)
 
-### Table view (P6)
-Tabular list of segments with columns `#, text (truncated), render_mode, character, confidence, notes`. Filterable by character, render_mode, confidence range. Sortable. Multi-select for bulk ops.
+Chapter text rendered top-to-bottom with per-segment styling by `render_mode` (prose, dialogue, epigraph, letter, poetry, song_lyrics, emphasis, thought, chapter_heading). Confidence surfaces as a left-border tint on each segment. Attributed speakers show as float labels above dialogue/thought/letter segments. Click-to-select opens the detail panel. Keyboard: `j`/`k` or `↑`/`↓` to navigate, `Enter` to open detail, `Esc` to clear selection, `?` for the help overlay.
 
-### Detail panel (P7)
-Right-side drawer opened from either view. Shows full segment text, character dropdown (voice-library-aware), render_mode dropdown, notes field, confidence read-only, `Preview audio` button (will unblock once the 501 endpoint becomes 200), `Save` and `Revert` buttons. Inline edits persist via `PATCH /api/segments/{id}`.
+### Table view
 
-### Bulk operations (P8)
-Reassign N segments to one character; change render_mode across a selection; mark a span `skip`. All go through `POST /api/segments/bulk-reassign` and the single-segment PATCH.
+Tabular list with sortable columns, confidence-tinted cells (same CONFIDENCE band), checkbox multi-select with an indeterminate header checkbox, and per-row `content-visibility:auto` so long chapters stay scroll-smooth.
 
-### Keyboard shortcuts (P8)
-- `j` / `k` — next / previous segment.
-- `c` — open character picker for current segment.
-- `r` — open render_mode picker.
-- `s` — toggle `skip`.
-- `/` — focus filter input (table view).
-- `?` — show shortcut cheatsheet.
+### Filters
 
-See `scratch/instructions.txt` for the Phase 4 resume marker.
+Drawer on desktop, bottom-sheet on mobile:
+- Speaker multi-select (includes an "Unattributed" bucket)
+- Confidence dual-range slider
+- Render mode multi-select
+- "Has emotion tags" toggle
+- "Has notes" toggle
+
+Persisted per-chapter in localStorage under `review:filters:{chapterId}`. Helpers live in `frontend/src/lib/review-filters.ts`.
+
+### Detail panel
+
+Opened from either view. Editable fields: `text` (textarea), `speaker` (character dropdown, voice-library-aware), `render_mode` (dropdown), `emotion_tags` (chips with add/remove), `notes`. Confidence is read-only. Save triggers `PATCH /api/segments/{id}`; `Cmd/Ctrl+Enter` saves from anywhere in the panel. When the text value differs from the stored one, the backend flips `segments.text_modified=1` and the UI surfaces a "✎ Edited" marker on that segment in both views.
+
+### Bulk operations
+
+Table view exposes multi-select (including `Cmd/Ctrl+A` select-all of the current filtered set):
+- **Reassign speaker** — single call to `POST /api/segments/bulk-reassign`
+- **Set render mode** — single call to `POST /api/segments/bulk-reassign`
+- **Add emotion tags / Remove emotion tags** — per-segment PATCHes, because the bulk endpoint applies the same `changes` to every selected segment and would overwrite per-segment tag lists.
+
+### Casting page integration
+
+The project's Casting page gained a Chapters section (`frontend/src/components/casting/ChaptersSection.tsx`):
+- Progress bar `{attributed} of {total} chapters attributed`
+- Per-chapter status chip: `Not started` / `Attributing…` (warn, pulse) / `Attributed` (accent) / `Failed` (error)
+- Inline row actions: `Attribute` for unattributed, `Retry` for failed, `Review` for attributed
+- `Attribute all ({n} remaining)` project-level button that disables while any `attribute_chapter` job is active
+
+---
+
+## Deferred to later phases
+
+- **"Approve 90+" bulk action** — Phase 5. Requires TTS generation to have anything to approve for; the surface is a no-op until Voicebox.
+- **Audio preview per segment** — Phase 5. `GET /api/segments/{id}/preview` returns HTTP 501 until Voicebox is wired; the UI button is present but disabled.
+- **Smart merge on re-attribution** — Phase 7. Re-attribution currently wipes all segments including user edits (`text_modified=1` rows). **Warning**: run re-attribution only when you want to discard operator edits. A segment-level diff/merge strategy is scoped for Phase 7.
+- **Pronunciation override UI** — Phase 5, paired with TTS so changes can be validated against generated audio.
