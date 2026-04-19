@@ -146,3 +146,26 @@ data/projects/<project_id>/audio/
 ```
 
 The `assembled/` directory is a pure cache. It's gitignored via the top-level `data/` rule; invalidation deletes files freely; a fresh `rm -rf data/projects/<id>/audio/assembled/` followed by `DELETE FROM chapter_assemblies WHERE ...` is a valid nuclear option with no data loss beyond the cache.
+
+## Stale failed jobs
+
+Phase 6 shipped with a Windows-specific asyncio bug (default `SelectorEventLoop` doesn't support `asyncio.create_subprocess_exec`). This was fixed in phase6-fix / phase6-fix3 by setting `WindowsProactorEventLoopPolicy` in both `backend/main.py` and `backend/main_serve.py`, but the failed `assemble_chapter` rows from before the fix remain in the `jobs` table.
+
+To keep those old rows from cluttering the per-project PendingJobsBanner, **`GET /api/projects/{id_or_slug}/jobs` hides failed `assemble_chapter` jobs older than 5 minutes by default** (implemented in `backend/api/jobs.py::list_project_jobs`). Live failures (<5 min old) still surface so real problems aren't masked.
+
+To see everything, including stale failures, for debug inspection:
+
+```
+GET /api/projects/<id_or_slug>/jobs?include_old_failures=true
+```
+
+The underlying rows are never auto-deleted — they remain in the `jobs` table indefinitely for post-mortem querying. If you want to purge them entirely:
+
+```sql
+DELETE FROM jobs
+  WHERE kind = 'assemble_chapter'
+    AND status = 'failed'
+    AND datetime(updated_at) < datetime('now', '-5 minutes');
+```
+
+The filter uses lexical string comparison on the `updated_at` column. SQLite stores `datetime('now')` as `"YYYY-MM-DD HH:MM:SS"` UTC text, which sorts chronologically as a string, so no format conversion is required in Python — the threshold is computed as `datetime.now(timezone.utc) - 5min` and compared directly.

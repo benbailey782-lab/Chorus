@@ -8,6 +8,7 @@ Endpoints:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -61,6 +62,7 @@ def list_project_jobs(
     status: Optional[JobStatusValue] = Query(default=None),
     kind: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
+    include_old_failures: bool = Query(default=False),
 ) -> list[JobOut]:
     project_id = _resolve_project_id(id_or_slug)
     jobs = repo.list_jobs(
@@ -69,4 +71,33 @@ def list_project_jobs(
         statuses=[status] if status else None,
         limit=limit,
     )
+    if not include_old_failures:
+        # Hide stale assembly failures from the default project jobs list.
+        # Context: Phase 6 shipped with a Windows asyncio bug where
+        # `asyncio.create_subprocess_exec` failed under the default
+        # SelectorEventLoop, leaving many `assemble_chapter` jobs stuck in
+        # `failed`. The bug was fixed in phase6-fix/phase6-fix3 (see
+        # `backend/main.py` + `backend/main_serve.py` setting
+        # `WindowsProactorEventLoopPolicy`), but the old rows persist in the
+        # `jobs` table and clutter PendingJobsBanner on every project page.
+        # Strategy: hide `assemble_chapter` failures older than 5 minutes by
+        # default. Live failures (<5 min) still surface so the operator sees
+        # real problems. Passing `?include_old_failures=true` returns
+        # everything for debug inspection.
+        #
+        # `updated_at` is stored as SQLite `datetime('now')` text, which is
+        # UTC ISO-ish ("YYYY-MM-DD HH:MM:SS"). ISO 8601 timestamps sort
+        # chronologically as strings, so a lexical `<` comparison against a
+        # threshold string is correct without parsing every row.
+        threshold_dt = datetime.now(timezone.utc) - timedelta(minutes=5)
+        threshold_str = threshold_dt.strftime("%Y-%m-%d %H:%M:%S")
+        jobs = [
+            j
+            for j in jobs
+            if not (
+                j.get("kind") == "assemble_chapter"
+                and j.get("status") == "failed"
+                and (j.get("updated_at") or "") < threshold_str
+            )
+        ]
     return [_to_out(j) for j in jobs]

@@ -107,3 +107,41 @@ This writes a silent WAV for every segment in the project, sized to match the se
 - **Live Voicebox + Mac deployment still needed** for real audio validation. Everything else has been exercised on Windows against silent WAVs.
 - Chapters with mixed-format segment files transcode through ffmpeg during assembly (one extra pass, lossless for WAV sources).
 - Text sync is **segment-level**, not word-level. A long sentence highlights as a single unit.
+
+## Phase 6.5 refinements
+
+Five small commits refined Phase 6 ergonomics without changing the core architecture.
+
+### Flip card (mobile)
+
+On phones, tap the cover art to flip it over and reveal the chapter transcript in the same square. Tap again to flip back. Your preference (cover vs transcript) is persisted in `localStorage` so the next chapter respects the last-used face.
+
+The bottom-sheet ("View full transcript") still exists for the taller, full-chapter reading view. Use the flip card for quick reference, the bottom-sheet for extended reading.
+
+### Draggable MiniPlayer
+
+The MiniPlayer is now a floating, draggable pill (Apple Music / Spotify style) rather than a full-width bottom bar.
+
+- **Press-and-hold ~300 ms** on the card body to start dragging; release anywhere.
+- **Quick tap** on the title area opens the full player; tap the play/close buttons to control.
+- **Snap**: releasing within 50 px of a viewport corner snaps the card there.
+- **Persistence**: position is saved per device breakpoint (`desktop` / `mobile`) in `localStorage` under `player:miniplayer-position`. Rotating or resizing re-clamps to the nearest valid corner.
+
+### Soft restore (refresh-safe)
+
+Reload the page (or close and reopen the tab) during playback and the player will pick up where you left off:
+
+- Audio scrubber is re-seated at the last-saved position.
+- **It stays paused** — no surprise auto-play.
+- A "Resumed at Xm Ys" chip appears until you press play.
+
+Saving is debounced on a 2-second cadence during playback, flushed on pause/chapter-change, and a final `fetch({ keepalive: true })` fires from `beforeunload` so in-flight position writes survive a tab close.
+
+### End-of-book
+
+When auto-advance tries to roll past the last chapter, the player now flips to a definitive **finished** state instead of spinning on "loading":
+
+- TransportControls shows a "Book complete" banner with a **Replay chapter** button.
+- The MiniPlayer shows "Finished: <chapter title>" and the play button becomes a Replay button (seek-to-zero + play).
+- A toast "Book finished" fires once on arrival.
+- Starting a different chapter, or clicking Replay, clears the finished state.

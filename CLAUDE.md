@@ -129,6 +129,20 @@ Run attribution pass on AGoT book 1 chapter-by-chapter via file-drop; manually i
 - **Pitch preservation**: use native `HTMLMediaElement.preservesPitch` (set all three vendor prefixes). Do **NOT** add `soundtouch-js` or `rubberband-web` unless the user reports quality issues at extreme speeds.
 - **Auto-advance preference**: `player:auto-advance` in `localStorage`, default `true`. Not a DB column — it's a client preference.
 
+### Phase 6.5 polish
+
+Five small commits refining the Phase 6 player. Each shipped as its own atomic commit on `main`:
+
+1. **`phase6.5-data-fixes`** — Full segment text in player transcript (was truncated to 80 chars in `GET /api/chapters/{id}/segment-timings`); MiniPlayer shows real chapter title + speaker (was stuck on "Loading…" because `loadChapter` never hydrated `chapter` metadata — now fetched alongside assembly trigger).
+2. **`phase6.5-position-restore`** — Soft restore on refresh (audio seeks to saved `position_ms` but stays paused with a "Resumed at Xm Ys" chip); position saved every 2s via scheduled save + on pause + on chapter change + via `navigator.sendBeacon`-style keepalive `fetch` on `beforeunload`.
+3. **`phase6.5-miniplayer-redesign`** — MiniPlayer is now a floating draggable pill (Apple Music style) instead of a full-width bottom bar. Press-and-hold 300 ms to drag; quick tap opens full player; position persisted in `localStorage` under `player:miniplayer-position` (per breakpoint); snaps to corners within 50 px; constrained to viewport on resize.
+4. **`phase6.5-mobile-flip-card`** — Mobile player has a 3D-flip card (cover art ↔ transcript) so the transcript is reachable without opening the bottom-sheet. Flip preference persisted in `localStorage`. Bottom-sheet still available for full-chapter review.
+5. **`phase6.5-cleanup`** — Project jobs list hides `assemble_chapter` failures older than 5 minutes by default (`GET /api/projects/{id}/jobs?include_old_failures=true` to override — leftover noise from the Windows asyncio bug fixed in phase6-fix/phase6-fix3); Player has a `'finished'` `PlayerStatus` for end-of-book with a "Book complete" banner + Replay button in `TransportControls`, and "Finished: <title>" in `MiniPlayer` with the play button acting as Replay.
+
+Conventions added:
+
+- **Mobile flip card vs desktop right pane**: they display the SAME transcript (`SyncedTextView`), just mounted in different parents. Don't fork behavior — both read `segmentTimings` + `currentSegmentId` from the store and call `playerController.seek(ms)` on click.
+
 ### Phase-5 frontend conventions
 
 - **Pronunciation manager** is a single shared component (`frontend/src/components/pronunciations/PronunciationManager.tsx`) parameterized by `scope: "global"|"project"`. Mounted by both `/settings/pronunciations` and `/project/:idOrSlug/pronunciations`.

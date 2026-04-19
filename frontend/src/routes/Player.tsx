@@ -126,6 +126,9 @@ export default function Player() {
       if (!chapters.length) return;
       void playerController.next(chapters).then((advanced) => {
         if (!advanced) {
+          // End-of-book. Flip to a definitive 'finished' state so the UI
+          // stops spinning on "loading" and surfaces a Replay CTA.
+          usePlayerStore.setState({ status: "finished" });
           toast({ kind: "success", message: "Book finished" });
         }
       });

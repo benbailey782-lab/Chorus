@@ -372,6 +372,7 @@ export default function MiniPlayer() {
   const isPlaying = status === "playing";
   const isBusy = status === "loading" || status === "buffering";
   const isError = status === "error";
+  const isFinished = status === "finished";
 
   const progress =
     durationMs > 0 ? Math.min(1, Math.max(0, positionMs / durationMs)) : 0;
@@ -382,11 +383,14 @@ export default function MiniPlayer() {
     if (t?.speaker_name) speakerLabel = t.speaker_name;
   }
 
-  const chapterLabel = chapter?.title
+  const rawChapterTitle = chapter?.title
     ? chapter.title
     : chapter?.number != null
       ? `Chapter ${chapter.number}`
       : "Loading…";
+  const chapterLabel = isFinished
+    ? `Finished: ${rawChapterTitle}`
+    : rawChapterTitle;
 
   // Initial for the album-art square: first letter of title, or "♪" fallback.
   const badgeInitial =
@@ -401,6 +405,13 @@ export default function MiniPlayer() {
       void playerController.loadChapter(projectIdOrSlug, chapterId).then(() => {
         playerController.play();
       });
+      return;
+    }
+    if (isFinished) {
+      // End-of-book Replay: seek to zero + play. The 'playing' event in
+      // audioPlayer.ts transitions status away from 'finished'.
+      playerController.seek(0);
+      playerController.play();
       return;
     }
     if (isPlaying) playerController.pause();
@@ -506,7 +517,15 @@ export default function MiniPlayer() {
             onClick={handlePlayPause}
             onPointerDown={swallowPointer}
             disabled={isBusy}
-            aria-label={isError ? "Retry" : isPlaying ? "Pause" : "Play"}
+            aria-label={
+              isError
+                ? "Retry"
+                : isFinished
+                  ? "Replay"
+                  : isPlaying
+                    ? "Pause"
+                    : "Play"
+            }
             className={[
               "h-10 w-10 rounded-full flex items-center justify-center",
               "min-h-tap min-w-tap",

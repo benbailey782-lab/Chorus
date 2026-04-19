@@ -23,7 +23,8 @@ export type PlayerStatus =
   | "playing"
   | "paused"
   | "buffering"
-  | "error";
+  | "error"
+  | "finished";
 
 export interface PlayerState {
   // Identity

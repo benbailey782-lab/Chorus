@@ -29,6 +29,7 @@ export default function TransportControls({ chapters, compact = false }: Props) 
   const isPlaying = status === "playing";
   const isLoading = status === "loading" || status === "buffering";
   const isError = status === "error";
+  const isFinished = status === "finished";
 
   const playPauseSize = compact ? "h-16 w-16" : "h-14 w-14";
   const skipSize = compact ? "h-12 w-12" : "h-11 w-11";
@@ -42,6 +43,27 @@ export default function TransportControls({ chapters, compact = false }: Props) 
     if (projectIdOrSlug && chapterId) {
       void playerController.loadChapter(projectIdOrSlug, chapterId);
     }
+  }
+
+  function replay() {
+    // Seek to zero + play the current chapter. The 'playing' status comes
+    // from the audio element's 'playing' event (see audioPlayer.ts) which
+    // clears the 'finished' state naturally.
+    playerController.seek(0);
+    playerController.play();
+  }
+
+  if (isFinished) {
+    return (
+      <div className="flex flex-col items-center gap-3">
+        <div className="chip border-accent/40 bg-accent/10 text-accent text-xs max-w-md text-center">
+          Book complete — thanks for listening.
+        </div>
+        <button type="button" className="btn-primary text-sm" onClick={replay}>
+          Replay chapter
+        </button>
+      </div>
+    );
   }
 
   if (isError) {
