@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import BulkActionsMenu from "../components/review/BulkActionsMenu";
 import DetailPanel from "../components/review/DetailPanel";
 import KeyboardHelp from "../components/review/KeyboardHelp";
 import ProseView from "../components/review/ProseView";
@@ -185,6 +186,16 @@ export default function ChapterReview() {
 
     function onKey(e: KeyboardEvent) {
       if (isEditable(e.target)) return;
+      // Cmd/Ctrl+A selects all visible rows — only meaningful in table view.
+      // We intercept before the browser's native select-all takes over, but
+      // only when the table view is active. Other views pass through.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        if (viewMode !== "table") return;
+        if (segs.length === 0) return;
+        e.preventDefault();
+        setSelectedIds(new Set(segs.map((s) => s.id)));
+        return;
+      }
       // ? toggles help regardless of other state. Shift+/ on US keyboards
       // reports as "?"; accept both forms.
       if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
@@ -219,7 +230,7 @@ export default function ChapterReview() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [segs, selectedId, helpOpen]);
+  }, [segs, selectedId, helpOpen, viewMode]);
 
   if (chapter.isLoading) return <p className="text-muted">Loading chapter…</p>;
   if (chapter.isError) {
@@ -320,9 +331,24 @@ export default function ChapterReview() {
 
             <button
               type="button"
-              disabled
-              title="Bulk actions coming in a later commit"
-              className="btn-ghost min-h-tap text-xs opacity-60 cursor-not-allowed"
+              disabled={selectedIds.size === 0}
+              onClick={() => {
+                // Switch to table view (bulk actions are table-view centric);
+                // the BulkActionsMenu is already mounted below whenever the
+                // selection is non-empty, so clicking here just ensures the
+                // selection bar / FAB is visible on the right surface.
+                if (viewMode !== "table") setViewMode("table");
+              }}
+              title={
+                selectedIds.size === 0
+                  ? "Select segments to enable bulk actions"
+                  : "Bulk actions"
+              }
+              className={`btn-ghost min-h-tap text-xs ${
+                selectedIds.size === 0
+                  ? "opacity-60 cursor-not-allowed"
+                  : "text-accent"
+              }`}
             >
               Bulk {selectedIds.size > 0 && <>({selectedIds.size})</>}
             </button>
@@ -356,15 +382,23 @@ export default function ChapterReview() {
               onSelect={setSelectedId}
             />
           ) : (
-            <TableView
-              segments={segs}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelect}
-              onSelectAll={selectAll}
-              onClearSelection={clearSelection}
-            />
+            <>
+              <BulkActionsMenu
+                selectedIds={selectedIds}
+                segments={visibleSegments}
+                characters={filterCharacters}
+                onDone={clearSelection}
+              />
+              <TableView
+                segments={segs}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onSelectAll={selectAll}
+                onClearSelection={clearSelection}
+              />
+            </>
           )}
         </div>
 
