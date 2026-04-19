@@ -423,15 +423,47 @@ export interface VoiceboxStatus {
   note: string;
 }
 
-/** Phase-5 richer health shape returned by GET /api/voicebox/status. */
+/** Phase-5 richer health shape returned by GET /api/voicebox/status.
+ *
+ * Phase-5-remediation additions:
+ *   - `configured` distinguishes "no URL saved" from "URL saved but off".
+ *   - `model_loaded` mirrors Voicebox's /health field for the Settings UI. */
 export interface VoiceboxHealth {
+  configured: boolean;
   enabled: boolean;
   reachable: boolean;
   base_url: string;
   version: string | null;
   profile_count: number | null;
   available_engines: string[];
+  model_loaded: boolean;
   error: string | null;
+}
+
+/** Response from POST /api/voicebox/test-connection — mirrors Voicebox's
+ * own /health response so the Settings UI can render it directly. */
+export interface VoiceboxTestConnectionResponse {
+  reachable: boolean;
+  version: string | null;
+  models_loaded: number;
+  gpu_available: boolean;
+  model_loaded: boolean;
+  profile_count: number;
+  error: string | null;
+}
+
+/** PATCH /api/voicebox/config body. Either/both fields optional;
+ * `base_url=""` is a valid value (clears the saved URL). */
+export interface VoiceboxConfigUpdate {
+  base_url?: string;
+  enabled?: boolean;
+}
+
+/** PATCH /api/voicebox/config response — new effective state after save. */
+export interface VoiceboxConfigOut {
+  base_url: string;
+  enabled: boolean;
+  configured: boolean;
 }
 
 export interface VoiceFilter {
@@ -505,6 +537,23 @@ export const api = {
   voiceboxStatus: () => request<VoiceboxStatus>("/api/voices/voicebox/status"),
 
   voiceboxHealth: () => request<VoiceboxHealth>("/api/voicebox/status"),
+
+  testVoiceboxConnection: (url: string) =>
+    request<VoiceboxTestConnectionResponse>(
+      "/api/voicebox/test-connection",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url }),
+      },
+    ),
+
+  updateVoiceboxConfig: (body: VoiceboxConfigUpdate) =>
+    request<VoiceboxConfigOut>("/api/voicebox/config", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   createVoice: async (body: VoiceCreate, audio?: File | null) => {
     const fd = new FormData();

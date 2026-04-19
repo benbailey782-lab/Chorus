@@ -8,9 +8,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     anthropic_api_key: str = ""
-    # Default 8090 — avoids collision with Vite (5173) and Chorus backend (8765).
-    # Voicebox's actual default is TBD; this is overridable via VOICEBOX_BASE_URL env var.
-    voicebox_base_url: str = "http://localhost:8090"
+    # Empty default = unconfigured. Voicebox v0.4.0 picks a runtime port on
+    # launch (printed in its own UI + /health), so hardcoding a guess was
+    # wrong — the operator sets the URL via VOICEBOX_BASE_URL env var OR
+    # via the Settings UI (which persists to data/voicebox_config.json and
+    # takes precedence at read time, see voicebox_config_store.get_effective).
+    voicebox_base_url: str = ""
     voicebox_enabled: bool = False
     voicebox_timeout_seconds: int = 120
     voicebox_default_wps: float = 2.5  # words per second for time estimates
@@ -38,6 +41,16 @@ class Settings(BaseSettings):
     # kicks in; truncation surfaces as a warning in the extract-cast API
     # response and in the UI confirmation modal.
     extract_cast_char_limit: int = 300_000
+
+    @property
+    def voicebox_configured(self) -> bool:
+        """True iff a non-empty base URL has been provided via env.
+
+        NOTE: this reflects env-only state. For the *effective* URL (which
+        also considers the runtime-writable ``data/voicebox_config.json``
+        override), call ``voicebox_config_store.get_effective()`` instead.
+        """
+        return bool(self.voicebox_base_url.strip())
 
     @property
     def data_path(self) -> Path:

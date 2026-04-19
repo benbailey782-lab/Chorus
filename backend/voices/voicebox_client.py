@@ -188,16 +188,34 @@ async def health_check(*, timeout: Optional[float] = None) -> VoiceboxHealth:
     unverified — TODO(voicebox-verify)). First one that returns 2xx wins.
     Returns reachable=False + error on network failure instead of raising,
     so the UI banner can render a stable state.
+
+    Phase-5-remediation: reads the *effective* config via
+    ``voicebox_config_store.get_effective()`` so UI-saved URLs take effect
+    immediately without a backend restart.
     """
-    settings = get_settings()
-    if not settings.voicebox_enabled:
+    from backend.voices import voicebox_config_store
+
+    base_url, enabled = voicebox_config_store.get_effective()
+    if not enabled:
         raise VoiceboxNotEnabled(
-            "Voicebox is disabled (VOICEBOX_ENABLED=false). "
-            "Set it to true and start the Voicebox server to use TTS features."
+            "Voicebox is disabled. Enable it in Settings > Voicebox or set "
+            "VOICEBOX_ENABLED=true."
+        )
+    if not base_url:
+        # Enabled but no URL — treat as unreachable with a clear error so
+        # the UI can prompt for configuration.
+        return VoiceboxHealth(
+            enabled=True,
+            reachable=False,
+            base_url="",
+            version=None,
+            profile_count=None,
+            available_engines=[],
+            error="Voicebox URL not configured",
         )
 
     t = timeout if timeout is not None else 2.0
-    base = settings.voicebox_base_url.rstrip("/")
+    base = base_url.rstrip("/")
     last_error: Optional[str] = None
 
     for path in _HEALTH_PATHS:
@@ -229,7 +247,7 @@ async def health_check(*, timeout: Optional[float] = None) -> VoiceboxHealth:
             return VoiceboxHealth(
                 enabled=True,
                 reachable=True,
-                base_url=settings.voicebox_base_url,
+                base_url=base_url,
                 version=version,
                 profile_count=profile_count,
                 available_engines=engines,
@@ -241,7 +259,7 @@ async def health_check(*, timeout: Optional[float] = None) -> VoiceboxHealth:
     return VoiceboxHealth(
         enabled=True,
         reachable=False,
-        base_url=settings.voicebox_base_url,
+        base_url=base_url,
         version=None,
         profile_count=None,
         available_engines=[],

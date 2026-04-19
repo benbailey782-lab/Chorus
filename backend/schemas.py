@@ -215,15 +215,69 @@ class VoiceboxStatusOut(BaseModel):
 
 class VoiceboxHealthOut(BaseModel):
     """GET /api/voicebox/status — richer Phase-5 shape with version,
-    profile count, and available engines. ``error`` is populated when
-    enabled=True but reachable=False."""
+    profile count, and available engines.
+
+    Phase-5-remediation additions:
+      * ``configured`` — ``bool(base_url.strip())``. The UI uses this to
+        distinguish "no URL saved yet" from "URL saved but disabled".
+      * ``model_loaded`` — mirrors Voicebox ``/health``'s field so the
+        Settings UI can surface whether Voicebox has loaded a TTS model.
+
+    ``error`` is populated when enabled=True but reachable=False.
+    """
+    configured: bool = False
     enabled: bool
     reachable: bool
     base_url: str
     version: Optional[str] = None
     profile_count: Optional[int] = None
     available_engines: list[str] = Field(default_factory=list)
+    model_loaded: bool = False
     error: Optional[str] = None
+
+
+class VoiceboxTestConnectionRequest(BaseModel):
+    """POST /api/voicebox/test-connection payload.
+
+    The UI uses this to probe an arbitrary URL without writing it to
+    config. ``url`` is whatever the user has typed into the URL input.
+    """
+    url: str
+
+
+class VoiceboxTestConnectionResponse(BaseModel):
+    """Response for POST /api/voicebox/test-connection.
+
+    Shape mirrors Voicebox's own ``/health`` response so the UI can render
+    "Reachable · version X · GPU: yes · Model loaded: yes · N profiles"
+    straight from this object.
+    """
+    reachable: bool
+    version: Optional[str] = None
+    models_loaded: int = 0
+    gpu_available: bool = False
+    model_loaded: bool = False
+    profile_count: int = 0
+    error: Optional[str] = None
+
+
+class VoiceboxConfigUpdate(BaseModel):
+    """PATCH /api/voicebox/config body. Either/both fields optional.
+
+    ``base_url=""`` is a valid value — it clears a previously-saved URL
+    (and forces ``enabled`` to False, since you can't enable without a
+    URL).
+    """
+    base_url: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class VoiceboxConfigOut(BaseModel):
+    """Response shape for PATCH /api/voicebox/config — the new effective
+    state after applying the update."""
+    base_url: str
+    enabled: bool
+    configured: bool
 
 
 # --- Characters (§9.3) ------------------------------------------------------
