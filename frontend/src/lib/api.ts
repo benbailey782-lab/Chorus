@@ -217,6 +217,51 @@ export interface ChapterGenerationStatus {
   in_progress_job_ids: string[];
 }
 
+// --- Playback + assembly (Phase 6, §9.7) -----------------------------------
+
+export interface PlaybackState {
+  project_id: string;
+  chapter_id: string | null;
+  current_segment_id: string | null;
+  position_ms: number;
+  speed: number;
+  updated_at: string;
+}
+
+export interface PlaybackStateUpsert {
+  chapter_id?: string | null;
+  current_segment_id?: string | null;
+  position_ms?: number;
+  speed?: number;
+}
+
+export interface AssemblyTrigger {
+  chapter_id: string;
+  job_id: string | null;
+  from_cache: boolean;
+}
+
+export interface AssemblyStatus {
+  chapter_id: string;
+  ready: boolean;
+  duration_ms: number | null;
+  assembling: boolean;
+  progress: number;
+  from_cache: boolean;
+  hash: string | null;
+  missing_segments: string[];
+}
+
+export interface SegmentTiming {
+  segment_id: string;
+  order_index: number;
+  start_ms: number;
+  end_ms: number;
+  duration_ms: number;
+  speaker_name: string | null;
+  text_preview: string;
+}
+
 export interface SegmentUpdate {
   character_id?: string | null;
   render_mode?: RenderMode;
@@ -678,5 +723,60 @@ export const api = {
   chapterGenerationStatus: (chapterId: string) =>
     request<ChapterGenerationStatus>(
       `/api/chapters/${chapterId}/generation-status`,
+    ),
+
+  // ---- Playback + assembly (Phase 6, §9.7) ----
+
+  /** Returns null on 404 (no saved state yet or project missing). All other
+   * errors (network, 5xx) still throw. The player's "resume where I left off"
+   * flow treats null the same as "start from zero". */
+  getPlaybackState: async (
+    projectIdOrSlug: string,
+  ): Promise<PlaybackState | null> => {
+    const res = await fetch(
+      `/api/projects/${projectIdOrSlug}/playback`,
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      let body = "";
+      try {
+        body = await res.text();
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    }
+    return (await res.json()) as PlaybackState;
+  },
+
+  upsertPlaybackState: (
+    projectIdOrSlug: string,
+    body: PlaybackStateUpsert,
+  ) =>
+    request<PlaybackState>(`/api/projects/${projectIdOrSlug}/playback`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  triggerAssembly: (chapterId: string, force = false) => {
+    const qs = force ? "?force=true" : "";
+    return request<AssemblyTrigger>(
+      `/api/chapters/${chapterId}/assemble${qs}`,
+      { method: "POST" },
+    );
+  },
+
+  chapterAssemblyStatus: (chapterId: string) =>
+    request<AssemblyStatus>(`/api/chapters/${chapterId}/assembly-status`),
+
+  /** Returns a URL string for use in `<audio src>`. Does NOT fetch. Cache-bust
+   * with `?t=<timestamp>` if a reassembly must invalidate browser cache. */
+  chapterAudioUrl: (chapterId: string): string =>
+    `/api/chapters/${chapterId}/audio`,
+
+  chapterSegmentTimings: (chapterId: string) =>
+    request<SegmentTiming[]>(
+      `/api/chapters/${chapterId}/segment-timings`,
     ),
 };

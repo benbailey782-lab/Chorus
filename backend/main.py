@@ -11,6 +11,7 @@ from backend.api import (
     generation,
     health,
     jobs as jobs_api,
+    playback as playback_api,
     projects,
     pronunciations,
     segments,
@@ -112,3 +113,4 @@ app.include_router(segments.router)
 app.include_router(pronunciations.router)
 app.include_router(generation.router)
 app.include_router(assembly_api.router)
+app.include_router(playback_api.router)
