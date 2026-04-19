@@ -1,6 +1,6 @@
 # CHORUS — Multi-Voice Theatrical Audiobook Generator
 
-> **Status:** Spec v0.2 — revised after vision-alignment pass. Supersedes v0.1.
+> **Status:** Spec v0.3 — director-only workflow, file-drop LLM integration. Supersedes v0.2.
 
 > **Working name:** Chorus. Alternatives: Bard, Prologue, Dotrice, Cadence, Voxbook. Decide before Phase 0.
 
@@ -10,7 +10,7 @@
 
 Chorus turns any book into a **full theatrical audiobook performance** — every character voiced distinctly, emotional beats rendered inline, ambient soundscapes layered under scenes, cover art generated — using local TTS models (Voicebox) and the Anthropic API for dialogue understanding.
 
-The target production quality sits somewhere between a BBC radio drama and a top-tier Audible performance. The user can either **drop a book in and walk away** (Automated Mode) or **direct the production step by step** (Director Mode). Output plays back in-app on phone or desktop, or exports to any standard audiobook player.
+The target production quality sits somewhere between a BBC radio drama and a top-tier Audible performance. The user **directs the production step by step** — Chorus pauses at every major creative decision so the user can review the output before committing. Output plays back in-app on phone or desktop, or exports to any standard audiobook player.
 
 This is a personal tool that may eventually be open-sourced, so code quality, documentation, and UX polish matter from the start.
 
@@ -24,30 +24,20 @@ Voicebox v0.2 ships five local TTS engines with a REST API and 2–3s-per-chunk 
 
 ---
 
-## 3. Operating Modes
+## 3. Review-Gated Workflow
 
-Chorus has two modes that share the same pipeline but differ in how much the user intervenes. Every project can be run in either mode, or started automated and finished in director mode.
+Chorus is a review-gated workflow where the user explicitly advances through each stage of the pipeline. Each stage produces output the user inspects before proceeding.
 
-### 3.1 Automated Mode
-> "Drop in book, walk away, come back to a finished audiobook."
+**Stages, in order:**
+1. **Upload** — drop in a `.txt` or `.epub`; Chorus parses chapters.
+2. **Cast extraction** — Claude returns a cast list; user edits names, descriptions, merges duplicates.
+3. **Voice casting** — auto-cast from the voice library; user previews each assignment, overrides where wanted, clones new voices if the library is thin.
+4. **Pronunciation review** — approve/edit phonetic overrides for unusual names and terms.
+5. **Per-chapter attribution review** — fix low-confidence segments inline.
+6. **Generation** — TTS runs; progress streamed; user can pause/resume.
+7. **Assembly** — FFmpeg stitches the chapter MP3s and the full M4B with chapter markers, cover, and ambient beds.
 
-Flow: Upload → Parse → Cast → Auto-assign voices → Attribute → Generate → Assemble → Done.
-
-User touches nothing between upload and completion. Cost and time estimates shown upfront with a "Start" confirmation.
-
-### 3.2 Director Mode
-> "Review every creative decision before committing to generation."
-
-Flow includes explicit pause-and-review gates at:
-- Cast list review (edit names, descriptions, merge duplicates)
-- Voice casting (preview each voice, override assignments, clone new voices)
-- Pronunciation review (approve/edit unusual-word phonetic overrides)
-- Attribution review per chapter (fix low-confidence segments)
-- Scene preview (render sample paragraphs before full generation)
-
-Each gate can be skipped if things look good. Director mode is where real-time voice preview is essential.
-
-**Mode switching:** A project can be started in Automated Mode and switched to Director Mode mid-run (pauses at the next natural gate), or vice versa.
+Each gate can be skipped when the output already looks good, but every stage is an explicit step the user confirms — there is no "drop in and walk away" path. Real-time voice preview is essential throughout.
 
 ---
 
@@ -65,7 +55,7 @@ Each gate can be skipped if things look good. Director mode is where real-time v
 - **Ambient soundscapes** (scene-level)
 - **Cover art generation** (one per project)
 - **In-app library with web-based player** (mobile-responsive, LAN-accessible from phone)
-- Automated and Director modes
+- Review-gated workflow (explicit user gates at cast, casting, pronunciation, attribution, generation)
 - Project persistence with resume
 - Cost + time estimation with live tracking
 
@@ -241,6 +231,10 @@ chorus/
 │   ├── chorus.db
 │   ├── voice_library/
 │   │   └── metadata.json
+│   ├── llm_queue/                    # File-drop LLM integration (§12A)
+│   │   ├── pending/                  # request_<id>.md — Chorus writes here
+│   │   ├── responses/                # response_<id>.json — Claude Code writes here
+│   │   └── completed/                # Claude Code moves pending files here after answering
 │   └── projects/
 │       └── <slug>/
 │           ├── source.txt
@@ -359,10 +353,10 @@ When a project's cast is extracted, auto-casting assigns a voice to each charact
 **Rules enforced by code (post-Claude):**
 - No voice assigned to >1 main character per project
 - Background pool voices can be reused (characters with <3 lines)
-- Gender mismatches flagged but allowed (user override in director mode)
+- Gender mismatches flagged but allowed (user can override at the voice-casting review gate)
 - If library has insufficient voices for distinct assignments, flag "need more voices" with suggestions for what's missing
 
-**Fallback:** If auto-casting fails (library too small), user is routed into manual casting in director mode.
+**Fallback:** If auto-casting fails (library too small), the user is routed into manual casting at the same review gate.
 
 ---
 
@@ -382,7 +376,7 @@ For books structured around POV characters (AGoT, most modern fantasy), a toggle
 
 **UI:**
 - Toggle in project settings: "Use POV character voice for narration"
-- Per-chapter override in director mode (user can set/change POV assignment)
+- Per-chapter override at the attribution review gate (user can set/change POV assignment)
 
 ---
 
@@ -399,7 +393,6 @@ All timestamps ISO 8601 UTC. All IDs are UUIDs.
 | author | TEXT | |
 | language | TEXT | ISO 639-1, default `en` |
 | status | TEXT | `ingesting`/`casting`/`attributing`/`generating`/`assembling`/`complete` |
-| mode | TEXT | `automated`/`director` |
 | pov_narrator_enabled | INTEGER | 0/1 |
 | ambient_enabled | INTEGER | 0/1 |
 | cover_art_path | TEXT | |
@@ -407,6 +400,8 @@ All timestamps ISO 8601 UTC. All IDs are UUIDs.
 | estimated_cost_usd | REAL | |
 | actual_cost_usd | REAL | |
 | created_at, updated_at | TEXT | |
+
+> **Migration note (v0.3):** the `mode` column was removed when Automated Mode was dropped from the product. Any existing projects should be treated as director-mode by default; at the time of this change no projects existed, so the column can simply be dropped in the migration.
 
 ### 9.2 `chapters`
 | Column | Type | Notes |
@@ -486,7 +481,7 @@ See §7.2 schema; stored in SQL with JSON columns for arrays.
 | project_id | TEXT | FK |
 | type | TEXT | `extract_characters`/`attribute_chapter`/`auto_cast`/`generate_chapter`/`assemble_chapter`/`generate_cover`/etc. |
 | payload | TEXT (JSON) | |
-| status | TEXT | `queued`/`running`/`complete`/`failed` |
+| status | TEXT | `queued`/`running`/`awaiting_response`/`complete`/`failed` — `awaiting_response` is used by the file-drop LLM integration (§12A) between rendering the prompt and parsing the JSON response |
 | progress | INTEGER | 0–100 |
 | estimated_duration_ms | INTEGER | |
 | estimated_cost_usd | REAL | |
@@ -581,11 +576,54 @@ Start at 2 parallel workers. Measure on real hardware before committing. Expose 
 
 ---
 
+## 12A. LLM Integration — File-Drop Mode
+
+For initial development (and through at least v1), Chorus does **not** call the Anthropic API directly. Instead, when a Claude-driven pass is triggered, Chorus renders the prompt to disk and waits for a companion Claude Code session to answer it. This lets development run against a Claude Code subscription instead of paying per-API-call for prompt iteration.
+
+### 12A.1 Mechanism
+
+1. **Render.** When a pass starts, Chorus renders the full prompt with all inputs substituted in (cast list JSON, chapter text, voice library, etc.) — the same text Claude would receive via the API.
+2. **Queue.** The rendered prompt is written to:
+   ```
+   data/llm_queue/pending/request_<id>.md
+   ```
+   where `<id>` is the corresponding `jobs.id`.
+3. **Mark the job as `awaiting_response`** (§9.8). The project UI surfaces this state so the user knows Chorus is waiting on Claude Code.
+4. **Watch.** A file watcher polls `data/llm_queue/responses/` for `response_<id>.json`.
+5. **Ingest.** When a response appears, Chorus parses the JSON, associates it with the job by `id`, advances the project state (cast extracted / chapter attributed / etc.), and marks the job `complete`. On parse failure, the job is marked `failed` with the parse error; the user can re-drop a fixed response file to retry.
+
+### 12A.2 The companion Claude Code session
+
+The user runs Claude Code in a parallel window with this standing instruction:
+
+> Watch `data/llm_queue/pending/` for new `request_*.md` files. For each, execute the prompt inside and write the resulting JSON (exact shape defined inside the prompt) to `data/llm_queue/responses/response_<id>.json` with the matching `<id>`. Then move the request file from `pending/` to `data/llm_queue/completed/`.
+
+This is the ONLY LLM integration for Phase 3 onward. Do not implement direct Anthropic API calls yet.
+
+### 12A.3 Post-v1 API mode
+
+The architecture anticipates a future where Chorus calls Anthropic directly, for users without a Claude Code subscription or for unattended batch runs:
+
+- Feature flag: `LLM_MODE` ∈ {`file_drop`, `api`}, **defaulting to `file_drop`**.
+- In `api` mode, the same rendered prompt is sent to the Anthropic SDK and the response is ingested inline, skipping the `awaiting_response` state.
+- Prompt rendering, schema validation, and job bookkeeping are identical across modes — only the transport differs.
+
+This is architecturally anticipated only; the `api` path is not implemented in v1.
+
+### 12A.4 Why this design
+
+- **Cost alignment.** Ben already pays for Claude Code; adding per-call Anthropic charges during prompt iteration would double-bill.
+- **Prompt iteration speed.** The `.md` files in `pending/` and `responses/` are human-readable artifacts — easy to inspect, re-run, or hand-fix without touching Chorus code.
+- **Debuggability.** Every LLM interaction leaves a file-level audit trail in `completed/` plus the persisted response JSON.
+- **Clean future switch.** Because the prompt is already rendered to a string and the response is already parsed from JSON, promoting to `api` mode is a transport swap, not a pipeline rewrite.
+
+---
+
 ## 13. Cost & Time Estimation
 
 ### 13.1 Upfront Estimator
 
-Before any Automated Mode run, Chorus shows:
+Before any LLM-driven pass, Chorus shows:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -628,7 +666,7 @@ One image per project, generated from the book's setting and theme.
 
 ### 14.1 Flow
 1. Claude generates an art prompt from book metadata + opening chapter
-2. User reviews/edits prompt (director mode) or skips (automated)
+2. User reviews/edits prompt (or skips the gate if they trust it)
 3. Image model produces cover
 4. Stored at `data/projects/<slug>/cover.png`
 5. Embedded in M4B metadata for in-player display
@@ -660,7 +698,7 @@ Mobile-first, dark-mode primary, responsive down to 375px width (iPhone SE basel
 | Project | `/project/:id` | Overview, actions, progress |
 | Casting | `/project/:id/cast` | Cast with voice assignments |
 | Voice Library | `/voices` | Browse, add, edit voices |
-| Review | `/project/:id/chapter/:num` | Attribution review (director mode) |
+| Review | `/project/:id/chapter/:num` | Per-chapter attribution review gate |
 | Player | `/project/:id/player` | Audiobook playback |
 | Settings | `/settings` | API keys, default engine, paths |
 
@@ -694,7 +732,7 @@ Two-pane on desktop, stacked on mobile:
   - Engine override dropdown
   - Notes field for director intent
 
-### 15.6 The Review View (Director Mode)
+### 15.6 The Review View
 Scrollable chapter with inline editing:
 - Each segment is a tap-to-expand card
 - Color-coded left border by character
@@ -739,9 +777,8 @@ All JSON, prefixed `/api`. Progress updates via SSE at `/api/events`.
 - `POST /projects` (upload)
 - `GET /projects/{id}`
 - `DELETE /projects/{id}`
-- `PATCH /projects/{id}` (settings: mode, POV toggle, ambient toggle)
-- `POST /projects/{id}/start` — kicks off Automated Mode
-- `POST /projects/{id}/pause`
+- `PATCH /projects/{id}` (settings: POV toggle, ambient toggle)
+- `POST /projects/{id}/pause` — pauses any long-running generation job
 - `POST /projects/{id}/resume`
 - `GET /projects/{id}/cost`
 
@@ -832,7 +869,7 @@ Each phase has a hard exit criterion. Do not advance until it's met.
 - Cast view UI
 - Auto-casting flow with review/override
 
-**Exit:** Extract AGoT cast, auto-cast from voice library, manually inspect assignments are sensible.
+**Exit:** Extract AGoT cast via file-drop LLM integration (§12A), auto-cast from voice library, manually inspect assignments are sensible.
 
 ### Phase 4 — Attribution + Special Content (Days 8–10)
 - `attribute_chapter.md` prompt (with render_mode + emotion tags)
@@ -865,13 +902,12 @@ Each phase has a hard exit criterion. Do not advance until it's met.
 
 ### Phase 7 — Cover Art + Polish (Days 17–18)
 - Cover art generation
-- Automated mode end-to-end polish
-- Director mode review gates
+- End-to-end review-gated workflow polish (clear stage transitions, skip-gate affordance, resume across restarts)
 - Cost estimator + live tracking
 - Notifications on completion
 - Error recovery (retry failed segments/chapters)
 
-**Exit:** Drop in short book in Automated Mode, walk away, return to finished audiobook with cover art.
+**Exit:** Drop in a short book, walk it through every review gate (cast → casting → pronunciation → attribution → generation → assembly), return a finished audiobook with cover art.
 
 ### Phase 8 — Full Book Run + Bug Bash (Days 19–20+)
 - Run full AGoT end-to-end
@@ -900,10 +936,10 @@ Items marked for discussion before or during implementation:
 
 ## 19. Success Criteria for v1
 
-1. **The AGoT test:** Drop *A Game of Thrones* EPUB in Automated Mode. Return to a finished M4B with cover art, ambient beds, distinct character voices, and theatrical delivery. Cost < $25. Time < 8 hours.
+1. **The AGoT test:** Drop *A Game of Thrones* EPUB into Chorus and walk it through every review gate (cast → casting → pronunciation → attribution → generation → assembly). Return a finished M4B with cover art, ambient beds, distinct character voices, and theatrical delivery. Cost < $25. Time < 8 hours of active + wait time.
 2. **The phone test:** Listen to a chapter on the phone over LAN, scrub, speed up to 1.5x, resume next day at the same position.
 3. **The quality test:** 10 random minutes of audio listened to with eyes closed. Character voices distinguishable. No mispronunciations of major names. Emotional beats land. Ambient layer enhances, doesn't distract.
-4. **The director test:** Pause after auto-cast, reassign 3 voices, continue. Pause after attribution on one chapter, fix 5 low-confidence segments, continue. Output reflects changes.
+4. **The director test:** At the casting gate, reassign 3 voices and continue. At the attribution gate on one chapter, fix 5 low-confidence segments and continue. Output reflects both changes.
 5. **The polish test:** An engineer friend opens the app, uses it without hand-holding, produces something listenable. No crashes, no cryptic errors.
 
 ---
@@ -963,14 +999,32 @@ Items marked for discussion before or during implementation:
 - Anthropic API docs: `https://docs.claude.com`
 
 ### B. Glossary
-- **Pass:** One Claude API call with a structured prompt and output
+- **Pass:** One Claude-driven operation with a structured prompt and a structured output. In v1 this is a file-drop exchange (§12A); in a future `api` mode it is a direct Anthropic SDK call.
 - **Segment:** Smallest audio generation unit — one speaker, one utterance
 - **Render mode:** How a segment is treated stylistically (prose / dialogue / epigraph / etc.)
 - **Pool:** Voice library grouping (main / background / narrator)
 - **POV Narrator:** Narration in a chapter uses the voice of the chapter's point-of-view character
-- **Director Mode:** User reviews every major step
-- **Automated Mode:** User touches nothing between upload and completion
+- **Review gate:** An explicit stage in the workflow (cast, casting, pronunciation, attribution, generation) where Chorus pauses and the user confirms before advancing.
+- **File-drop integration:** Chorus's v1 LLM transport — prompts rendered to `data/llm_queue/pending/`, responses read from `data/llm_queue/responses/` (§12A).
 
 ---
 
-*End of spec v0.2. Update as implementation reveals constraints.*
+## 23. Revision History
+
+- **v0.3 (2026-04-18)** — Removed Automated Mode; added file-drop LLM integration (§12A). Driven by personal-use scope and Claude Code subscription alignment.
+  - Section 3 rewritten as "Review-Gated Workflow" (single flow, no mode switching).
+  - `projects.mode` column dropped (§9.1 migration note).
+  - Added `awaiting_response` status to `jobs.status` (§9.8).
+  - New §12A — file-drop LLM integration mechanism, Claude Code companion instruction, future `LLM_MODE=api` flag.
+  - `data/llm_queue/{pending,responses,completed}/` added to §5.4 directory layout.
+  - `POST /projects/{id}/start` removed from §16; pause/resume retained for long-running generation jobs.
+  - §13.1 estimator reframed: triggered before any LLM-driven pass (not before an "Automated Mode run").
+  - §17 Phase 3 exit references file-drop explicitly; Phase 7 rewritten around review gates.
+  - §19 success criteria 1 and 4 rewritten to reflect the single review-gated flow.
+  - §22 glossary: removed Director/Automated Mode; added Review gate + File-drop integration.
+- **v0.2 (2026-04-16)** — Vision-alignment pass. Superseded by v0.3.
+- **v0.1** — Initial spec draft.
+
+---
+
+*End of spec v0.3. Update as implementation reveals constraints.*
