@@ -370,6 +370,35 @@ export interface PronunciationExtractResult {
 
 // --- Voice library (§7.2) ---------------------------------------------------
 
+/** Phase-5R: the seven Voicebox v0.4.0 TTS engines. Mirrors the
+ *  ``VoiceboxEngine`` Literal in `backend/schemas.py` and the CHECK
+ *  constraint on `voices.voicebox_engine` in fresh DBs. */
+export type VoiceboxEngine =
+  | "qwen3-tts"
+  | "luxtts"
+  | "chatterbox-multilingual"
+  | "chatterbox-turbo"
+  | "humeai-tada"
+  | "kokoro-82m"
+  | "qwen-custom-voice";
+
+/** Engine catalog driven from the spec. ``description`` is shown as helper
+ *  text below the selector in VoiceEditor. Order matches the user-facing
+ *  preference (default first). */
+export const VOICEBOX_ENGINES: {
+  id: VoiceboxEngine;
+  label: string;
+  description: string;
+}[] = [
+  { id: "qwen3-tts", label: "Qwen3-TTS", description: "General purpose, proven quality (default)" },
+  { id: "chatterbox-turbo", label: "Chatterbox Turbo", description: "Expressive with emotion tags ([laugh], [sigh])" },
+  { id: "chatterbox-multilingual", label: "Chatterbox Multilingual", description: "Multi-language support" },
+  { id: "luxtts", label: "LuxTTS", description: "Premium quality" },
+  { id: "humeai-tada", label: "HumeAI TADA", description: "Broadest language support (23 languages)" },
+  { id: "kokoro-82m", label: "Kokoro 82M", description: "Fast lightweight model" },
+  { id: "qwen-custom-voice", label: "Qwen CustomVoice", description: "Voice cloning specialist" },
+];
+
 export interface Voice {
   id: string;
   voicebox_profile_id: string | null;
@@ -392,6 +421,10 @@ export interface Voice {
   times_used: number;
   added_at: string;
   updated_at: string;
+  /** Phase-5R: per-voice TTS engine. Defaults to "qwen3-tts". */
+  voicebox_engine: VoiceboxEngine;
+  /** Phase-5R: optional Voicebox effect-preset id applied at generation. */
+  voicebox_effect_preset_id: string | null;
 }
 
 export interface VoiceCreate {
@@ -409,9 +442,21 @@ export interface VoiceCreate {
   sample_text?: string | null;
   source_notes?: string | null;
   tags?: string[];
+  /** Phase-5R: per-voice TTS engine (defaults to "qwen3-tts" server-side). */
+  voicebox_engine?: VoiceboxEngine;
+  voicebox_effect_preset_id?: string | null;
 }
 
 export type VoiceUpdate = Partial<VoiceCreate>;
+
+/** Phase-5R: response from POST /api/voices wrapping the saved Voice with a
+ *  best-effort Voicebox sync error. Voice is always persisted on success
+ *  even if profile creation failed — UI surfaces the error then offers a
+ *  "Sync to Voicebox" retry from the library. */
+export interface VoiceCreateResponse {
+  voice: Voice;
+  voicebox_sync_error: string | null;
+}
 
 export interface VoicePoolCounts {
   narrator: number;
@@ -562,8 +607,17 @@ export const api = {
     const fd = new FormData();
     fd.append("voice_json", JSON.stringify(body));
     if (audio) fd.append("audio", audio);
-    return request<Voice>("/api/voices", { method: "POST", body: fd });
+    return request<VoiceCreateResponse>("/api/voices", { method: "POST", body: fd });
   },
+
+  /** Phase-5R: re-attempt eager Voicebox profile creation for a voice with a
+   *  null voicebox_profile_id. Backend uploads the existing sample (if any)
+   *  and updates the row. Returns the same wrapper shape as createVoice. */
+  syncVoiceToVoicebox: (voiceId: string) =>
+    request<VoiceCreateResponse>(
+      `/api/voices/${voiceId}/sync-to-voicebox`,
+      { method: "POST" },
+    ),
 
   updateVoice: (id: string, body: VoiceUpdate) =>
     request<Voice>(`/api/voices/${id}`, {

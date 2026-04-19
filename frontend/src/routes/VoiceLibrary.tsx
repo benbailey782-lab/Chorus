@@ -3,11 +3,19 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import VoiceboxStatusBanner from "../components/VoiceboxStatusBanner";
-import { api, sampleAudioUrl, type Voice } from "../lib/api";
+import {
+  VOICEBOX_ENGINES,
+  api,
+  sampleAudioUrl,
+  type Voice,
+  type VoiceboxEngine,
+} from "../lib/api";
+import { useToast } from "../lib/toast";
 import { POOLS, POOL_TARGETS, type Gender, type Pool } from "../lib/constants";
 
 export default function VoiceLibrary() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [pool, setPool] = useState<Pool | null>(null);
   const [gender, setGender] = useState<Gender | null>(null);
   const [q, setQ] = useState("");
@@ -37,6 +45,23 @@ export default function VoiceLibrary() {
       qc.invalidateQueries({ queryKey: ["voices"] });
       qc.invalidateQueries({ queryKey: ["voice-pool-counts"] });
     },
+  });
+
+  const syncMut = useMutation({
+    mutationFn: (id: string) => api.syncVoiceToVoicebox(id),
+    onSuccess: (resp) => {
+      qc.invalidateQueries({ queryKey: ["voices"] });
+      if (resp.voicebox_sync_error) {
+        toast({
+          kind: "error",
+          message: `Sync failed: ${resp.voicebox_sync_error}`,
+        });
+      } else {
+        toast({ kind: "success", message: "Synced to Voicebox." });
+      }
+    },
+    onError: (e: Error) =>
+      toast({ kind: "error", message: `Sync failed: ${e.message}` }),
   });
 
   const noFilters = !pool && !gender && !q.trim();
@@ -139,6 +164,8 @@ export default function VoiceLibrary() {
             <VoiceCard
               key={v.id}
               voice={v}
+              syncing={syncMut.isPending && syncMut.variables === v.id}
+              onSync={() => syncMut.mutate(v.id)}
               onDelete={() => {
                 if (
                   window.confirm(
@@ -156,7 +183,18 @@ export default function VoiceLibrary() {
   );
 }
 
-function VoiceCard({ voice, onDelete }: { voice: Voice; onDelete: () => void }) {
+function VoiceCard({
+  voice,
+  syncing,
+  onSync,
+  onDelete,
+}: {
+  voice: Voice;
+  syncing: boolean;
+  onSync: () => void;
+  onDelete: () => void;
+}) {
+  const needsSync = voice.voicebox_profile_id === null;
   return (
     <li className="card p-4 flex flex-col gap-3">
       <div className="flex items-start justify-between gap-2">
@@ -171,6 +209,11 @@ function VoiceCard({ voice, onDelete }: { voice: Voice; onDelete: () => void }) 
           </div>
         </div>
         <PoolBadge pool={voice.pool} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <EngineBadge engine={voice.voicebox_engine} />
+        {needsSync && <NeedsSyncBadge />}
       </div>
 
       {voice.tone.length > 0 && (
@@ -211,6 +254,21 @@ function VoiceCard({ voice, onDelete }: { voice: Voice; onDelete: () => void }) 
         >
           Edit
         </Link>
+        {needsSync && (
+          <button
+            type="button"
+            onClick={onSync}
+            disabled={syncing || !voice.has_sample_audio}
+            className="btn-surface"
+            title={
+              voice.has_sample_audio
+                ? "Retry Voicebox profile creation"
+                : "Upload a sample first"
+            }
+          >
+            {syncing ? "Syncing…" : "Sync"}
+          </button>
+        )}
         <button type="button" onClick={onDelete} className="btn-danger">
           Delete
         </button>
@@ -230,6 +288,40 @@ function PoolBadge({ pool }: { pool: Pool }) {
       className={`chip text-[10px] uppercase tracking-wider shrink-0 ${map[pool]}`}
     >
       {pool}
+    </span>
+  );
+}
+
+/** Phase-5R: color-coded engine chip. Palette is intentionally muted —
+ *  legibility wins over individuation. Unknown engine IDs fall back to a
+ *  neutral surface-2 chip so the UI never crashes on a forward-compat id. */
+function EngineBadge({ engine }: { engine: VoiceboxEngine }) {
+  const label =
+    VOICEBOX_ENGINES.find((e) => e.id === engine)?.label ?? engine;
+  const palette: Record<VoiceboxEngine, string> = {
+    "qwen3-tts": "bg-surface-2 text-muted",
+    "chatterbox-turbo": "bg-warn/20 text-warn",
+    "chatterbox-multilingual": "bg-amber-500/20 text-amber-300",
+    luxtts: "bg-accent/20 text-accent",
+    "humeai-tada": "bg-indigo-500/20 text-indigo-300",
+    "kokoro-82m": "bg-success/20 text-success",
+    "qwen-custom-voice": "bg-rose-500/20 text-rose-300",
+  };
+  const cls = palette[engine] ?? "bg-surface-2 text-muted";
+  return (
+    <span className={`chip text-[10px] uppercase tracking-wider ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+function NeedsSyncBadge() {
+  return (
+    <span
+      className="chip text-[10px] uppercase tracking-wider bg-warn/20 text-warn"
+      title="This voice has no Voicebox profile — click Sync to create one."
+    >
+      Needs sync
     </span>
   );
 }

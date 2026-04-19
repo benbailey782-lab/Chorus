@@ -53,6 +53,9 @@ def _loads(raw: Optional[str]) -> list[str]:
 
 def _row_to_voice(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
+    # voicebox_engine / voicebox_effect_preset_id were added in v8
+    # (Phase-5 remediation Commit 1). _row_get tolerates pre-v8 rows
+    # surfacing through tests with old fixtures.
     return {
         "id": d["id"],
         "voicebox_profile_id": d["voicebox_profile_id"],
@@ -74,7 +77,18 @@ def _row_to_voice(row: sqlite3.Row) -> dict[str, Any]:
         "times_used": d["times_used"],
         "added_at": d["added_at"],
         "updated_at": d["updated_at"],
+        "voicebox_engine": _row_get(d, "voicebox_engine", "qwen3-tts"),
+        "voicebox_effect_preset_id": _row_get(d, "voicebox_effect_preset_id", None),
     }
+
+
+def _row_get(row: dict[str, Any], key: str, default: Any) -> Any:
+    """Like dict.get but tolerates ``sqlite3.Row``-style mappings."""
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return default
+    return value if value is not None else default
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +174,11 @@ def create_voice(data: dict[str, Any]) -> dict[str, Any]:
         "accent", "tone_json", "timbre", "pace", "register",
         "character_archetypes_json", "pool", "engine_preference", "sample_text",
         "source_notes", "tags_json", "sample_audio_path",
+        "voicebox_engine", "voicebox_effect_preset_id",
     ]
     values = [
         voice_id,
-        data.get("voicebox_profile_id"),  # always NULL at create time in stub mode
+        data.get("voicebox_profile_id"),  # still NULL at DB insert; eager sync happens in the API layer
         data["display_name"],
         data.get("gender"),
         data.get("age_range"),
@@ -179,6 +194,8 @@ def create_voice(data: dict[str, Any]) -> dict[str, Any]:
         data.get("source_notes"),
         _dumps(data.get("tags")),
         data.get("sample_audio_path"),
+        data.get("voicebox_engine") or "qwen3-tts",
+        data.get("voicebox_effect_preset_id"),
     ]
     placeholders = ", ".join(["?"] * len(columns))
 
@@ -196,6 +213,8 @@ _SCALAR_UPDATE_FIELDS = {
     "display_name", "gender", "age_range", "accent", "timbre", "pace",
     "register", "pool", "engine_preference", "sample_text", "source_notes",
     "voicebox_profile_id",
+    # Phase-5 remediation: per-voice engine + effect preset are editable.
+    "voicebox_engine", "voicebox_effect_preset_id",
 }
 # Fields that live in *_json columns.
 _ARRAY_UPDATE_FIELDS = {
@@ -292,3 +311,59 @@ def _safe_unlink(path: Path) -> None:
     except OSError:
         # Don't let a stuck file stop a DB delete; log at caller if important.
         pass
+
+
+# ---------------------------------------------------------------------------
+# voice_samples helpers (Phase 5 remediation Commit 5)
+# ---------------------------------------------------------------------------
+
+
+def add_voice_sample(
+    voice_id: str,
+    sample_path: str,
+    *,
+    label: str = "Original",
+    voicebox_sample_id: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    """Insert (or upsert) a row in ``voice_samples`` for this voice.
+
+    ``(voice_id, sample_path)`` is UNIQUE; repeated calls with the same pair
+    update ``voicebox_sample_id`` in place rather than erroring.
+    """
+    sid = str(uuid.uuid4())
+    with connect() as conn:
+        # Try INSERT; on UNIQUE conflict, UPDATE the voicebox_sample_id.
+        existing = conn.execute(
+            "SELECT id FROM voice_samples WHERE voice_id = ? AND sample_path = ?",
+            (voice_id, sample_path),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE voice_samples SET voicebox_sample_id = COALESCE(?, voicebox_sample_id), "
+                "label = COALESCE(?, label), duration_ms = COALESCE(?, duration_ms) "
+                "WHERE id = ?",
+                (voicebox_sample_id, label, duration_ms, existing["id"]),
+            )
+            row_id = existing["id"]
+        else:
+            conn.execute(
+                "INSERT INTO voice_samples "
+                "(id, voice_id, sample_path, voicebox_sample_id, label, duration_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (sid, voice_id, sample_path, voicebox_sample_id, label, duration_ms),
+            )
+            row_id = sid
+        row = conn.execute(
+            "SELECT * FROM voice_samples WHERE id = ?", (row_id,)
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def list_voice_samples(voice_id: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM voice_samples WHERE voice_id = ? ORDER BY created_at",
+            (voice_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]

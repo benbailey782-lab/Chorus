@@ -178,6 +178,19 @@ class VoiceOut(VoiceBase):
     updated_at: str
 
 
+class VoiceCreateResponse(BaseModel):
+    """Phase 5 remediation — POST /api/voices wraps the saved Voice with a
+    best-effort Voicebox sync error.
+
+    The voice row is always persisted; ``voicebox_sync_error`` is populated
+    when eager profile creation failed (Voicebox unreachable, no sample,
+    flag off, etc.). The UI surfaces it as a banner and offers a manual
+    "Sync to Voicebox" retry from the library.
+    """
+    voice: VoiceOut
+    voicebox_sync_error: Optional[str] = None
+
+
 class VoiceSampleOut(BaseModel):
     """Phase 5 remediation — one row per entry in the new voice_samples table.
 

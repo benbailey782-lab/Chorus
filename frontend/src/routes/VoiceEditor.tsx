@@ -6,7 +6,14 @@ import { Field, FieldRow } from "../components/Field";
 import Select from "../components/Select";
 import TagInput from "../components/TagInput";
 import VoiceboxStatusBanner from "../components/VoiceboxStatusBanner";
-import { api, sampleAudioUrl, type Voice, type VoiceCreate } from "../lib/api";
+import {
+  VOICEBOX_ENGINES,
+  api,
+  sampleAudioUrl,
+  type Voice,
+  type VoiceCreate,
+  type VoiceboxEngine,
+} from "../lib/api";
 import {
   AGE_RANGES,
   AUDIO_ACCEPT,
@@ -47,6 +54,8 @@ const DEFAULT_FORM: VoiceCreate = {
   tone: [],
   character_archetypes: [],
   tags: [],
+  // Phase-5R: default engine on create. Editing hydrates from the voice row.
+  voicebox_engine: "qwen3-tts",
 };
 
 export default function VoiceEditor() {
@@ -64,6 +73,10 @@ export default function VoiceEditor() {
   const [form, setForm] = useState<VoiceCreate>(DEFAULT_FORM);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Phase-5R: non-fatal Voicebox sync error from the last save. The voice
+   *  is still persisted; we show this as a warning banner so the user can
+   *  retry the sync later from the library. */
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
   // Hydrate the form once the existing voice lands.
@@ -86,6 +99,8 @@ export default function VoiceEditor() {
       sample_text: v.sample_text ?? "",
       source_notes: v.source_notes ?? "",
       tags: v.tags,
+      voicebox_engine: v.voicebox_engine,
+      voicebox_effect_preset_id: v.voicebox_effect_preset_id,
     });
   }, [isNew, existing.data]);
 
@@ -102,10 +117,17 @@ export default function VoiceEditor() {
       };
       return api.createVoice(body, file);
     },
-    onSuccess: () => {
+    onSuccess: (resp) => {
       qc.invalidateQueries({ queryKey: ["voices"] });
       qc.invalidateQueries({ queryKey: ["voice-pool-counts"] });
-      navigate("/voices");
+      if (resp.voicebox_sync_error) {
+        // Voice was saved — sync failed. Surface the warning + navigate
+        // away (library card will show "Needs sync" so the user can retry).
+        setSyncWarning(resp.voicebox_sync_error);
+        window.setTimeout(() => navigate("/voices"), 2200);
+      } else {
+        navigate("/voices");
+      }
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -292,7 +314,32 @@ export default function VoiceEditor() {
       {/* TTS + provenance -------------------------------------------- */}
       <section className="card p-4 space-y-3">
         <h2 className="text-lg font-display">TTS + provenance</h2>
-        <Field label="Engine preference" hint="Leave as Auto unless you know this voice sounds better on a specific engine.">
+        <Field label="Engine" required>
+          <select
+            value={form.voicebox_engine ?? "qwen3-tts"}
+            onChange={(e) =>
+              patch("voicebox_engine", e.target.value as VoiceboxEngine)
+            }
+            className="input"
+          >
+            {VOICEBOX_ENGINES.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted mt-1">
+            {
+              VOICEBOX_ENGINES.find((e) => e.id === form.voicebox_engine)
+                ?.description
+            }
+          </p>
+          <p className="text-xs text-muted mt-1">
+            Engine choice can be changed later but requires regeneration of
+            any existing audio.
+          </p>
+        </Field>
+        <Field label="Engine preference (legacy)" hint="Kept for Phase 2/3 data. The Engine field above is the authoritative per-voice TTS engine.">
           <Select<EnginePreference>
             value={form.engine_preference ?? null}
             onChange={(v) => patch("engine_preference", v)}
@@ -371,6 +418,13 @@ export default function VoiceEditor() {
       {error && (
         <div className="card border-error/40 bg-error/10 text-error px-3 py-2 text-sm">
           {error}
+        </div>
+      )}
+
+      {syncWarning && (
+        <div className="card border-warn/40 bg-warn/10 text-warn px-3 py-2 text-sm">
+          Voice saved but Voicebox sync failed: {syncWarning}. You can sync
+          later from the library.
         </div>
       )}
 
