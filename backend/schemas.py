@@ -270,6 +270,7 @@ class SegmentOut(BaseModel):
     duration_ms: Optional[int] = None
     status: str = "pending"
     text_modified: bool = False
+    approved_at: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -310,6 +311,45 @@ class AttributeAllResponse(BaseModel):
     chapter_count: int
     job_ids: list[str] = Field(default_factory=list)
     skipped_chapter_ids: list[str] = Field(default_factory=list)  # already had segments
+
+
+# --- Pronunciations (§9.6) -------------------------------------------------
+
+
+PronunciationCategory = Literal[
+    "character_name", "place", "proper_noun", "phrase", "other"
+]
+
+
+class PronunciationBase(BaseModel):
+    term: str
+    phonetic: str
+    ipa: Optional[str] = None
+    confidence: Optional[float] = None
+    category: Optional[PronunciationCategory] = None
+    notes: Optional[str] = None
+    source: Optional[str] = None
+
+
+class PronunciationCreate(PronunciationBase):
+    pass
+
+
+class PronunciationUpdate(BaseModel):
+    term: Optional[str] = None
+    phonetic: Optional[str] = None
+    ipa: Optional[str] = None
+    confidence: Optional[float] = None
+    category: Optional[PronunciationCategory] = None
+    notes: Optional[str] = None
+    source: Optional[str] = None
+
+
+class PronunciationOut(PronunciationBase):
+    id: str
+    project_id: Optional[str] = None   # null for global entries
+    created_at: str
+    updated_at: str
 
 
 class ChapterMeta(BaseModel):

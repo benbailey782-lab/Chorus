@@ -5,7 +5,7 @@ from typing import Iterator
 
 from backend.config import get_settings
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS projects (
     total_duration_ms INTEGER,
     estimated_cost_usd REAL,
     actual_cost_usd REAL,
+    generation_config_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -120,8 +121,10 @@ CREATE TABLE IF NOT EXISTS segments (
     voice_override_id TEXT REFERENCES voices(id) ON DELETE SET NULL,
     audio_path TEXT,
     duration_ms INTEGER,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','generating','generated','approved','error')),
     text_modified INTEGER NOT NULL DEFAULT 0,
+    approved_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(chapter_id, order_index)
@@ -130,6 +133,7 @@ CREATE TABLE IF NOT EXISTS segments (
 CREATE INDEX IF NOT EXISTS idx_segments_chapter ON segments(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_segments_character ON segments(character_id);
 
+-- TODO(phase-7): add applies_to_character_id TEXT REFERENCES characters(id) for per-character pronunciation scoping (spec §9.6).
 CREATE TABLE IF NOT EXISTS pronunciations (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -137,9 +141,32 @@ CREATE TABLE IF NOT EXISTS pronunciations (
     phonetic TEXT NOT NULL,
     ipa TEXT,
     confidence REAL,
+    category TEXT,
     notes TEXT,
+    source TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(project_id, term)
 );
+
+-- Global pronunciations library (§9.6). Term is case-insensitive unique so
+-- "Tyrion" and "tyrion" map to the same entry. `term` + `phonetic` match the
+-- project-scoped pronunciations table for consistency; the pronounce_unusual
+-- prompt's word/respelling vocabulary is mapped in the handler.
+CREATE TABLE IF NOT EXISTS pronunciations_global (
+    id TEXT PRIMARY KEY,
+    term TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    phonetic TEXT NOT NULL,
+    ipa TEXT,
+    confidence REAL,
+    category TEXT,
+    notes TEXT,
+    source TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pronunciations_global_term ON pronunciations_global(term COLLATE NOCASE);
 
 CREATE TABLE IF NOT EXISTS playback_state (
     project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
@@ -281,6 +308,154 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "ALTER TABLE segments ADD COLUMN text_modified INTEGER NOT NULL DEFAULT 0"
             )
+
+    if current < 6:
+        # Phase 5: TTS generation + pronunciation overrides.
+        # 1. Create pronunciations_global (new, case-insensitive unique on term).
+        # 2. Extend pronunciations with category/source/created_at/updated_at.
+        # 3. Extend projects with generation_config_json.
+        # 4. Rebuild segments to add CHECK on status + approved_at column.
+        #    SQLite can't add a CHECK to an existing column without a table
+        #    rebuild, so we follow the v4 pattern: create new table, copy rows,
+        #    drop old, rename. Preserves ALL rows. If any existing status value
+        #    falls outside the allowed set, abort with MigrationAborted naming
+        #    the offending row.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pronunciations_global (
+                id TEXT PRIMARY KEY,
+                term TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                phonetic TEXT NOT NULL,
+                ipa TEXT,
+                confidence REAL,
+                category TEXT,
+                notes TEXT,
+                source TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pronunciations_global_term "
+            "ON pronunciations_global(term COLLATE NOCASE)"
+        )
+
+        pron_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(pronunciations)").fetchall()
+        }
+        if "category" not in pron_cols:
+            conn.execute("ALTER TABLE pronunciations ADD COLUMN category TEXT")
+        if "source" not in pron_cols:
+            conn.execute("ALTER TABLE pronunciations ADD COLUMN source TEXT")
+        if "created_at" not in pron_cols:
+            conn.execute(
+                "ALTER TABLE pronunciations ADD COLUMN created_at TEXT "
+                "NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
+        if "updated_at" not in pron_cols:
+            conn.execute(
+                "ALTER TABLE pronunciations ADD COLUMN updated_at TEXT "
+                "NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
+
+        proj_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
+        if "generation_config_json" not in proj_cols:
+            conn.execute(
+                "ALTER TABLE projects ADD COLUMN generation_config_json TEXT"
+            )
+
+        # Segments rebuild: formal status CHECK + approved_at.
+        allowed_statuses = (
+            "pending", "generating", "generated", "approved", "error",
+        )
+        invalid_rows = conn.execute(
+            f"""
+            SELECT id, status FROM segments
+            WHERE status NOT IN ({','.join('?' * len(allowed_statuses))})
+            LIMIT 1
+            """,
+            allowed_statuses,
+        ).fetchall()
+        if invalid_rows:
+            bad = invalid_rows[0]
+            raise MigrationAborted(
+                f"Refusing to migrate: segment row id={bad['id']} has status="
+                f"{bad['status']!r}, which is outside the new CHECK set "
+                f"{allowed_statuses}. Inspect and coerce the row manually "
+                "(e.g. UPDATE segments SET status='pending' WHERE id=...) "
+                "before retrying."
+            )
+
+        seg_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(segments)").fetchall()
+        }
+        # approved_at may already exist if someone hand-patched; rebuild still
+        # runs because it's the only way to add the status CHECK.
+        has_approved_at = "approved_at" in seg_cols
+
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE segments_new (
+                    id TEXT PRIMARY KEY,
+                    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+                    character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+                    order_index INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    render_mode TEXT NOT NULL DEFAULT 'prose'
+                        CHECK (render_mode IN (
+                            'prose','dialogue','epigraph','letter','poetry',
+                            'song_lyrics','emphasis','thought','chapter_heading'
+                        )),
+                    emotion_tags_json TEXT NOT NULL DEFAULT '[]',
+                    confidence INTEGER,
+                    notes TEXT,
+                    voice_override_id TEXT REFERENCES voices(id) ON DELETE SET NULL,
+                    audio_path TEXT,
+                    duration_ms INTEGER,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','generating','generated','approved','error')),
+                    text_modified INTEGER NOT NULL DEFAULT 0,
+                    approved_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(chapter_id, order_index)
+                )
+                """
+            )
+            approved_at_select = "approved_at" if has_approved_at else "NULL"
+            conn.execute(
+                f"""
+                INSERT INTO segments_new (
+                    id, chapter_id, character_id, order_index, text, render_mode,
+                    emotion_tags_json, confidence, notes, voice_override_id,
+                    audio_path, duration_ms, status, text_modified, approved_at,
+                    created_at, updated_at
+                )
+                SELECT
+                    id, chapter_id, character_id, order_index, text, render_mode,
+                    emotion_tags_json, confidence, notes, voice_override_id,
+                    audio_path, duration_ms, status, text_modified, {approved_at_select},
+                    created_at, updated_at
+                FROM segments
+                """
+            )
+            conn.execute("DROP TABLE segments")
+            conn.execute("ALTER TABLE segments_new RENAME TO segments")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_segments_chapter ON segments(chapter_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_segments_character ON segments(character_id)"
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
