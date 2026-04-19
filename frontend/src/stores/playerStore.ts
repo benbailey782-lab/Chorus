@@ -50,6 +50,11 @@ export interface PlayerState {
   // Preferences (persisted to localStorage)
   autoAdvance: boolean;
 
+  // Soft-restore hint: when loadChapter restores a non-zero position on
+  // page load / refresh, we stash it here so the UI can surface a
+  // "Resumed at Xm Ys" chip until the user presses play.
+  restoredPositionMs: number | null;
+
   // Actions
   setStatus: (s: PlayerStatus) => void;
   setPosition: (ms: number) => void;
@@ -60,6 +65,7 @@ export interface PlayerState {
   setAssemblyError: (err: string | null) => void;
   setMissingSegments: (ids: string[]) => void;
   setAutoAdvance: (on: boolean) => void;
+  clearRestoredPosition: () => void;
   loadProject: (idOrSlug: string) => void;
   loadChapter: (
     chapterId: string,
@@ -98,6 +104,7 @@ export const usePlayerStore = create<PlayerState>()(
     assemblyError: null,
     missingSegments: [],
     autoAdvance: readAutoAdvance(),
+    restoredPositionMs: null,
 
     setStatus: (s) => set({ status: s }),
     setPosition: (ms) => set({ positionMs: ms }),
@@ -118,6 +125,7 @@ export const usePlayerStore = create<PlayerState>()(
       }
       set({ autoAdvance: on });
     },
+    clearRestoredPosition: () => set({ restoredPositionMs: null }),
     loadProject: (idOrSlug) =>
       set({
         projectIdOrSlug: idOrSlug,
@@ -157,6 +165,7 @@ export const usePlayerStore = create<PlayerState>()(
         assemblyProgress: 0,
         assemblyError: null,
         missingSegments: [],
+        restoredPositionMs: null,
       }),
   })),
 );

@@ -21,11 +21,16 @@ import { usePlayerStore } from "../stores/playerStore";
 class PlayerController {
   private audio: HTMLAudioElement | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private beforeUnloadBound = false;
 
   private ensureAudio(): HTMLAudioElement {
     if (this.audio) return this.audio;
     const a = new Audio();
     a.preload = "auto";
+    // Wire the beforeunload save-flush once, lazily, when the audio
+    // element first comes into existence. We can't do it at module load
+    // because SSR / test environments don't have `window`.
+    this.bindBeforeUnload();
     // Native pitch preservation is the primary strategy. Flagged on all
     // three vendor names because Safari still ships the webkit prefix,
     // and older Firefox used moz. Unknown prefixes are ignored silently.
@@ -65,6 +70,29 @@ class PlayerController {
 
   async loadChapter(projectIdOrSlug: string, chapterId: string): Promise<void> {
     const set = usePlayerStore.setState;
+
+    // 0. Flush any pending save for the OUTGOING chapter before we overwrite
+    //    the store. Fire-and-forget; we don't want a slow network call to
+    //    block the new load. Errors are swallowed — losing a position save
+    //    when switching chapters is annoying but non-fatal.
+    const prev = usePlayerStore.getState();
+    if (prev.chapterId && prev.projectIdOrSlug) {
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      void api
+        .upsertPlaybackState(prev.projectIdOrSlug, {
+          chapter_id: prev.chapterId,
+          current_segment_id: prev.currentSegmentId,
+          position_ms: prev.positionMs,
+          speed: prev.speed,
+        })
+        .catch(() => {
+          /* non-fatal */
+        });
+    }
+
     // 1. Store project + clear per-load state. `chapter` is wiped here so the
     //    MiniPlayer doesn't show a stale title from the previous chapter while
     //    the metadata fetch below is in flight.
@@ -80,6 +108,7 @@ class PlayerController {
       assemblyProgress: 0,
       assemblyError: null,
       missingSegments: [],
+      restoredPositionMs: null,
     });
 
     // 1a. Fetch chapter metadata so the MiniPlayer / full player can render a
@@ -132,14 +161,25 @@ class PlayerController {
     audio.src = api.chapterAudioUrl(chapterId);
     audio.load();
 
-    // 7. On metadata, restore position (one-shot listener).
+    // 7. On metadata, restore position (one-shot listener). Audio stays
+    //    paused — the user explicitly clicks play to resume. We push the
+    //    restored position into the store immediately so the scrubber
+    //    reflects it before the audio element's first `timeupdate` fires,
+    //    and we stash `restoredPositionMs` so the UI can show a soft
+    //    "Resumed at Xm Ys" hint until play is pressed.
     if (restorePositionMs > 0) {
+      const target = restorePositionMs;
       const onReady = () => {
         try {
-          audio.currentTime = restorePositionMs / 1000;
+          audio.currentTime = target / 1000;
         } catch {
           /* ignore — browser may refuse out-of-range seeks */
         }
+        usePlayerStore.setState({
+          positionMs: target,
+          status: "paused",
+          restoredPositionMs: target,
+        });
         audio.removeEventListener("loadedmetadata", onReady);
       };
       audio.addEventListener("loadedmetadata", onReady);
@@ -190,6 +230,11 @@ class PlayerController {
   }
 
   play(): void {
+    // Clear the soft-restore hint — the user has engaged with playback,
+    // so the "Resumed at Xm Ys" chip should disappear.
+    if (usePlayerStore.getState().restoredPositionMs !== null) {
+      usePlayerStore.setState({ restoredPositionMs: null });
+    }
     this.ensureAudio()
       .play()
       .catch((e: unknown) => {
@@ -200,6 +245,16 @@ class PlayerController {
 
   pause(): void {
     this.audio?.pause();
+    // Flush any pending save so a pause is persisted immediately rather
+    // than waiting on the debounce window. Pattern: clear the pending
+    // timer, then fire the save directly.
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.savePlaybackState().catch(() => {
+      /* swallow — retry happens on the next save */
+    });
   }
 
   seek(ms: number): void {
@@ -293,14 +348,56 @@ class PlayerController {
   }
 
   private scheduleSave(): void {
-    // Debounce — one PATCH per 5s window is plenty for a 30-min chapter.
+    // Debounce — one PATCH per 2s window. Tightened from 5s in Phase 6.5
+    // so a refresh loses at most ~2s of progress. Pause, chapter-change,
+    // and beforeunload all flush out of band.
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       this.savePlaybackState().catch(() => {
         /* swallow — retry happens on the next save */
       });
-    }, 5000);
+    }, 2000);
+  }
+
+  /**
+   * Wire a `beforeunload` handler that flushes the current playback state
+   * synchronously on tab close / refresh / navigation-away. We prefer
+   * `fetch(..., { keepalive: true })` over `sendBeacon` because our
+   * endpoint is PATCH (sendBeacon is POST-only). Both variants are
+   * designed for exactly this use case — the browser lets the request
+   * outlive the page.
+   */
+  private bindBeforeUnload(): void {
+    if (this.beforeUnloadBound) return;
+    if (typeof window === "undefined") return;
+    this.beforeUnloadBound = true;
+    window.addEventListener("beforeunload", () => {
+      const s = usePlayerStore.getState();
+      if (!s.projectIdOrSlug || !s.chapterId) return;
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      const body = JSON.stringify({
+        chapter_id: s.chapterId,
+        current_segment_id: s.currentSegmentId,
+        position_ms: s.positionMs,
+        speed: s.speed,
+      });
+      try {
+        fetch(`/api/projects/${s.projectIdOrSlug}/playback`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {
+          /* best effort */
+        });
+      } catch {
+        /* best effort — page is unloading */
+      }
+    });
   }
 
   private async savePlaybackState(): Promise<void> {

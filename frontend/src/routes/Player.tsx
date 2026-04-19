@@ -77,6 +77,7 @@ export default function Player() {
   const setAutoAdvance = usePlayerStore((s) => s.setAutoAdvance);
   const assemblyProgress = usePlayerStore((s) => s.assemblyProgress);
   const status = usePlayerStore((s) => s.status);
+  const restoredPositionMs = usePlayerStore((s) => s.restoredPositionMs);
 
   // ---- Initial chapter resolution + load ----------------------------------
 
@@ -294,6 +295,7 @@ export default function Player() {
               progress={assemblyProgress}
               error={assemblyError}
             />
+            <ResumeHint restoredPositionMs={restoredPositionMs} status={status} />
             <TransportControls chapters={chapters} />
             <Scrubber />
             <div className="flex items-center justify-between flex-wrap gap-3">
@@ -354,6 +356,7 @@ export default function Player() {
       status={status}
       assemblyProgress={assemblyProgress}
       assemblyError={assemblyError}
+      restoredPositionMs={restoredPositionMs}
       missingDialog={
         <IncompleteChapterDialog
           open={missingDialogOpen}
@@ -393,6 +396,7 @@ function MobilePlayerLayout({
   status,
   assemblyProgress,
   assemblyError,
+  restoredPositionMs,
   missingDialog,
 }: {
   projectTitle: string;
@@ -405,6 +409,7 @@ function MobilePlayerLayout({
   status: PlayerStatus;
   assemblyProgress: number;
   assemblyError: string | null;
+  restoredPositionMs: number | null;
   missingDialog: React.ReactNode;
 }) {
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -501,6 +506,7 @@ function MobilePlayerLayout({
           paddingBottom: "calc(1rem + env(safe-area-inset-bottom, 0px))",
         }}
       >
+        <ResumeHint restoredPositionMs={restoredPositionMs} status={status} />
         <Scrubber />
         <div className="flex items-center justify-between gap-2">
           <SpeedControl compact />
@@ -608,6 +614,37 @@ function MobilePlayerLayout({
 // ---------------------------------------------------------------------------
 // Shared small UI atoms
 // ---------------------------------------------------------------------------
+
+/**
+ * Soft-restore hint shown after a refresh when the controller reseated
+ * the scrubber at the last-saved position. Clicking play clears
+ * `restoredPositionMs` in the store, which hides this chip.
+ */
+function ResumeHint({
+  restoredPositionMs,
+  status,
+}: {
+  restoredPositionMs: number | null;
+  status: PlayerStatus;
+}) {
+  if (restoredPositionMs === null || restoredPositionMs <= 0) return null;
+  if (status !== "paused" && status !== "ready") return null;
+  const totalSec = Math.floor(restoredPositionMs / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  const label = m > 0 ? `${m}m ${s}s` : `${s}s`;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center justify-center"
+    >
+      <span className="chip text-[11px] text-muted">
+        Resumed at {label} — press play to continue
+      </span>
+    </div>
+  );
+}
 
 function AssemblyProgressBar({
   status,
