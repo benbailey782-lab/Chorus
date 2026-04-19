@@ -162,6 +162,13 @@ export default function Casting() {
         >
           Pronunciations
         </Link>
+        <Link
+          to={`/play/${idOrSlug}`}
+          className="btn-surface text-sm"
+          title="Open the full-screen player for this project"
+        >
+          Open player
+        </Link>
       </div>
 
       {/* Main layout ------------------------------------------------- */}

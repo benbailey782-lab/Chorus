@@ -373,6 +373,14 @@ export default function ChapterReview() {
               );
             })()}
 
+            <Link
+              to={`/play/${idOrSlug}?chapter=${chapterId}`}
+              className="btn-surface min-h-tap text-xs"
+              title="Open this chapter in the full-screen player"
+            >
+              Play chapter
+            </Link>
+
             <button
               type="button"
               onClick={() => setFiltersOpen(true)}

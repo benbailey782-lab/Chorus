@@ -59,3 +59,50 @@
            px-3 py-1 text-xs text-fg;
   }
 }
+
+/* Player scrubber — native range input with custom thumb. The track is
+   painted behind the input via a sibling div, so the input track itself is
+   transparent. Thumb is a small teal dot that grows on hover. */
+.chorus-scrubber {
+  height: 24px;
+  cursor: pointer;
+}
+.chorus-scrubber::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+}
+.chorus-scrubber::-moz-range-track {
+  height: 6px;
+  background: transparent;
+}
+.chorus-scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 9999px;
+  background: #4ec8be;
+  border: 2px solid #0a0a0a;
+  margin-top: -4px;
+  transition: transform 120ms ease;
+}
+.chorus-scrubber::-webkit-slider-thumb:hover,
+.chorus-scrubber:focus::-webkit-slider-thumb {
+  transform: scale(1.25);
+}
+.chorus-scrubber::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border-radius: 9999px;
+  background: #4ec8be;
+  border: 2px solid #0a0a0a;
+  transition: transform 120ms ease;
+}
+.chorus-scrubber::-moz-range-thumb:hover,
+.chorus-scrubber:focus::-moz-range-thumb {
+  transform: scale(1.25);
+}
+.chorus-scrubber:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

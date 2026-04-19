@@ -5,6 +5,7 @@ import ToastContainer from "./components/Toast";
 import Casting from "./routes/Casting";
 import ChapterReview from "./routes/ChapterReview";
 import Library from "./routes/Library";
+import Player from "./routes/Player";
 import PlayerStub from "./routes/PlayerStub";
 import Project from "./routes/Project";
 import Pronunciations from "./routes/Pronunciations";
@@ -65,6 +66,7 @@ function AppShell() {
           <Route path="/voices/new" element={<VoiceEditor />} />
           <Route path="/voices/:id/edit" element={<VoiceEditor />} />
           <Route path="/player" element={<PlayerStub />} />
+          <Route path="/play/:idOrSlug" element={<Player />} />
           <Route path="/settings" element={<Settings />} />
           <Route
             path="/settings/pronunciations"
