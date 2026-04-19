@@ -5,7 +5,7 @@ from typing import Iterator
 
 from backend.config import get_settings
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -168,12 +168,32 @@ CREATE TABLE IF NOT EXISTS pronunciations_global (
 
 CREATE INDEX IF NOT EXISTS idx_pronunciations_global_term ON pronunciations_global(term COLLATE NOCASE);
 
+-- Playback state (§9.7). Single row per project; Phase 6 rebuild swaps
+-- `chapter_number` for chapter_id/current_segment_id UUID references and
+-- adds a `speed` control bounded to the UI's allowed range.
 CREATE TABLE IF NOT EXISTS playback_state (
     project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-    chapter_number INTEGER NOT NULL DEFAULT 1,
+    chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+    current_segment_id TEXT REFERENCES segments(id) ON DELETE SET NULL,
     position_ms INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    speed REAL NOT NULL DEFAULT 1.0 CHECK (speed >= 0.25 AND speed <= 4.0),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Chapter assemblies (Phase 6). One row per chapter once the per-segment
+-- audio has been concatenated into a single file; `segment_hash` is the
+-- cache key (re-derived from segment ids + durations + approved/raw state).
+CREATE TABLE IF NOT EXISTS chapter_assemblies (
+    id TEXT PRIMARY KEY,
+    chapter_id TEXT NOT NULL UNIQUE REFERENCES chapters(id) ON DELETE CASCADE,
+    audio_path TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    segment_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_chapter_assemblies_chapter_id ON chapter_assemblies(chapter_id);
 
 -- Jobs (§9.8). ``kind`` == spec's ``type`` (kept for v1 compatibility).
 -- ``status``: queued / running / awaiting_response / complete / failed.
@@ -451,6 +471,89 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_segments_character ON segments(character_id)"
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    if current < 7:
+        # Phase 6: Player + Playback UI.
+        # 1. Rebuild playback_state: drop chapter_number (numeric), add
+        #    chapter_id (UUID FK), current_segment_id (UUID FK), speed
+        #    (bounded REAL). Keep project_id PK + position_ms + updated_at.
+        #    We can't resolve chapter_number → chapter_id without project
+        #    context inside the migration, so legacy rows migrate with
+        #    chapter_id=NULL; the UI will fall back to chapter 1 on first
+        #    open. In the expected dev-DB case the table is empty anyway.
+        # 2. Create chapter_assemblies (new, one row per chapter).
+        import logging
+        log = logging.getLogger(__name__)
+
+        existing_playback = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='playback_state'"
+        ).fetchone()
+
+        conn.execute("BEGIN")
+        try:
+            if existing_playback:
+                legacy_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM playback_state"
+                ).fetchone()["c"]
+                if legacy_count > 0:
+                    log.info(
+                        "phase6 migration: preserving %d playback_state row(s); "
+                        "chapter_number will be dropped (chapter_id set NULL).",
+                        legacy_count,
+                    )
+                conn.execute("ALTER TABLE playback_state RENAME TO playback_state_old")
+            conn.execute(
+                """
+                CREATE TABLE playback_state (
+                    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                    chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+                    current_segment_id TEXT REFERENCES segments(id) ON DELETE SET NULL,
+                    position_ms INTEGER NOT NULL DEFAULT 0,
+                    speed REAL NOT NULL DEFAULT 1.0 CHECK (speed >= 0.25 AND speed <= 4.0),
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            if existing_playback:
+                # Best-effort migration: preserve project_id / position_ms /
+                # updated_at; leave chapter_id + current_segment_id NULL and
+                # accept the default speed (1.0).
+                conn.execute(
+                    """
+                    INSERT INTO playback_state (
+                        project_id, chapter_id, current_segment_id,
+                        position_ms, speed, updated_at
+                    )
+                    SELECT
+                        project_id, NULL, NULL,
+                        COALESCE(position_ms, 0), 1.0,
+                        COALESCE(updated_at, CURRENT_TIMESTAMP)
+                    FROM playback_state_old
+                    """
+                )
+                conn.execute("DROP TABLE playback_state_old")
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chapter_assemblies (
+                    id TEXT PRIMARY KEY,
+                    chapter_id TEXT NOT NULL UNIQUE REFERENCES chapters(id) ON DELETE CASCADE,
+                    audio_path TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    segment_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chapter_assemblies_chapter_id "
+                "ON chapter_assemblies(chapter_id)"
             )
             conn.execute("COMMIT")
         except Exception:

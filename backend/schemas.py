@@ -460,3 +460,61 @@ class ChapterGenerationStatusOut(BaseModel):
     approved: int
     error: int
     in_progress_job_ids: list[str]
+
+
+# --- Playback + assembly (Phase 6, §9.7) ------------------------------------
+
+
+class PlaybackStateOut(BaseModel):
+    project_id: str
+    chapter_id: Optional[str] = None
+    current_segment_id: Optional[str] = None
+    position_ms: int = 0
+    speed: float = 1.0
+    updated_at: str
+
+
+class PlaybackStateUpsert(BaseModel):
+    """PATCH /api/projects/{id}/playback-state. Any subset of fields may be
+    provided; unset means leave unchanged."""
+    chapter_id: Optional[str] = None
+    current_segment_id: Optional[str] = None
+    position_ms: Optional[int] = None
+    speed: Optional[float] = None
+
+
+class ChapterAssemblyOut(BaseModel):
+    id: str
+    chapter_id: str
+    audio_path: str
+    duration_ms: int
+    segment_hash: str
+    created_at: str
+    updated_at: str
+
+
+class AssemblyStatusOut(BaseModel):
+    """GET /api/chapters/{id}/assembly — used by the player UI to decide
+    whether to stream the concatenated chapter file or trigger an assembly
+    job first."""
+    chapter_id: str
+    ready: bool
+    duration_ms: Optional[int] = None
+    assembling: bool = False
+    progress: int = 0        # 0-100
+    from_cache: bool = False
+    hash: Optional[str] = None
+    missing_segments: list[str] = Field(default_factory=list)
+
+
+class SegmentTimingOut(BaseModel):
+    """Per-segment timing row in the assembly timeline. ``text_preview`` is
+    truncated to ~80 chars so the player can render a scrub tooltip without
+    pulling full segment bodies."""
+    segment_id: str
+    order_index: int
+    start_ms: int
+    end_ms: int
+    duration_ms: int
+    speaker_name: Optional[str] = None
+    text_preview: str
