@@ -29,6 +29,22 @@ EnginePreference = Literal[
     "auto", "chatterbox_turbo", "qwen3_tts", "humeai_tada", "luxtts", "unknown"
 ]
 
+# Phase 5 remediation — Voicebox v0.4.0's 7 TTS engines. Mirrored in the fresh
+# CHECK constraint on voices.voicebox_engine in SCHEMA_SQL and enforced at the
+# application layer for DBs upgraded via the v7→v8 migration (SQLite can't ADD
+# COLUMN with a CHECK). Distinct from ``EnginePreference`` (used for the older
+# `engine_preference` column with its own vocabulary) — kept separate so we
+# don't retroactively break Phase 2/3 data.
+VoiceboxEngine = Literal[
+    "qwen3-tts",
+    "luxtts",
+    "chatterbox-multilingual",
+    "chatterbox-turbo",
+    "humeai-tada",
+    "kokoro-82m",
+    "qwen-custom-voice",
+]
+
 
 class ProjectCreate(BaseModel):
     title: str
@@ -116,6 +132,11 @@ class VoiceBase(BaseModel):
     sample_text: Optional[str] = None
     source_notes: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
+    # Phase 5 remediation: per-voice TTS engine + effect preset. The CHECK
+    # constraint in SCHEMA_SQL covers fresh DBs; the Literal type enforces
+    # the allowed set on DBs upgraded via the v7→v8 migration.
+    voicebox_engine: VoiceboxEngine = "qwen3-tts"
+    voicebox_effect_preset_id: Optional[str] = None
 
 
 class VoiceCreate(VoiceBase):
@@ -142,6 +163,9 @@ class VoiceUpdate(BaseModel):
     sample_text: Optional[str] = None
     source_notes: Optional[str] = None
     tags: Optional[list[str]] = None
+    # Phase 5 remediation — both fully optional here (unset = unchanged).
+    voicebox_engine: Optional[VoiceboxEngine] = None
+    voicebox_effect_preset_id: Optional[str] = None
 
 
 class VoiceOut(VoiceBase):
@@ -152,6 +176,22 @@ class VoiceOut(VoiceBase):
     times_used: int = 0
     added_at: str
     updated_at: str
+
+
+class VoiceSampleOut(BaseModel):
+    """Phase 5 remediation — one row per entry in the new voice_samples table.
+
+    ``voicebox_sample_id`` is populated once the sample has been synced with a
+    Voicebox profile (via POST /profiles/{id}/samples); null until then.
+    Backfilled rows from the v7→v8 migration carry ``label='Original'``.
+    """
+    id: str
+    voice_id: str
+    sample_path: str
+    voicebox_sample_id: Optional[str] = None
+    label: Optional[str] = None
+    duration_ms: Optional[int] = None
+    created_at: str
 
 
 class VoicePoolCounts(BaseModel):
@@ -288,6 +328,9 @@ class SegmentOut(BaseModel):
     status: str = "pending"
     text_modified: bool = False
     approved_at: Optional[str] = None
+    # Phase 5 remediation — read-only; set by the generation pipeline when
+    # Voicebox returns a generation id. Null on legacy/pre-remediation audio.
+    voicebox_generation_id: Optional[str] = None
     created_at: str
     updated_at: str
 

@@ -1,11 +1,12 @@
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
 from backend.config import get_settings
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -75,6 +76,12 @@ CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id);
 
 -- Voice library (§7.2). Mirrors the metadata schema exactly; arrays are stored
 -- as JSON text columns per §9.4 ("stored in SQL with JSON columns for arrays").
+-- Phase 5 remediation (v8): adds voicebox_engine + voicebox_effect_preset_id for
+-- per-voice TTS engine selection and effect-preset assignment. The CHECK
+-- constraint on voicebox_engine applies to fresh-create only (via this
+-- SCHEMA_SQL) — SQLite can't ADD COLUMN with CHECK, so existing databases
+-- upgraded via the v7→v8 migration rely on the Pydantic Literal to enforce
+-- the allowed engine set at the application layer.
 CREATE TABLE IF NOT EXISTS voices (
     id TEXT PRIMARY KEY,
     voicebox_profile_id TEXT,
@@ -93,12 +100,37 @@ CREATE TABLE IF NOT EXISTS voices (
     source_notes TEXT,
     tags_json TEXT NOT NULL DEFAULT '[]',
     sample_audio_path TEXT,
+    voicebox_engine TEXT NOT NULL DEFAULT 'qwen3-tts'
+        CHECK (voicebox_engine IN (
+            'qwen3-tts','luxtts','chatterbox-multilingual',
+            'chatterbox-turbo','humeai-tada','kokoro-82m','qwen-custom-voice'
+        )),
+    voicebox_effect_preset_id TEXT,
     times_used INTEGER NOT NULL DEFAULT 0,
     added_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_voices_pool ON voices(pool);
+
+-- Voice samples (Phase 5 remediation). Multi-sample support per voice — the
+-- original voices.sample_audio_path is backfilled as the first entry labelled
+-- 'Original' during the v7→v8 migration; new samples are added via
+-- POST /api/voices/{id}/samples (Phase 5 remediation commit 4).
+-- voicebox_sample_id is null until the sample is synced with a Voicebox
+-- profile via the add-sample-to-profile endpoint.
+CREATE TABLE IF NOT EXISTS voice_samples (
+    id TEXT PRIMARY KEY,
+    voice_id TEXT NOT NULL REFERENCES voices(id) ON DELETE CASCADE,
+    sample_path TEXT NOT NULL,
+    voicebox_sample_id TEXT,
+    label TEXT,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (voice_id, sample_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_samples_voice_id ON voice_samples(voice_id);
 
 -- Segments (§9.5). Phase 4 rebuild: widens render_mode to the full §6
 -- vocabulary, adds notes / voice_override_id / created_at / updated_at /
@@ -125,6 +157,7 @@ CREATE TABLE IF NOT EXISTS segments (
         CHECK (status IN ('pending','generating','generated','approved','error')),
     text_modified INTEGER NOT NULL DEFAULT 0,
     approved_at TEXT,
+    voicebox_generation_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(chapter_id, order_index)
@@ -559,6 +592,80 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+    if current < 8:
+        # Phase 5 remediation: Voicebox-parity schema additions.
+        # 1. voices.voicebox_engine — per-voice TTS engine selection (default
+        #    'qwen3-tts'). SQLite can't ADD COLUMN with a CHECK constraint, so
+        #    the allowed-set enforcement on existing DBs lives in the Pydantic
+        #    `VoiceboxEngine` Literal. Fresh databases (via SCHEMA_SQL) include
+        #    the CHECK at table-create time.
+        # 2. voices.voicebox_effect_preset_id — nullable reference to a
+        #    Voicebox-side effect preset id.
+        # 3. segments.voicebox_generation_id — nullable, tracks which Voicebox
+        #    generation produced the current audio (for version history).
+        #    Column doesn't exist on v7 DBs, so the "abort if rows have a
+        #    non-null value" defensive check naturally can't run — any existing
+        #    rows get NULL on ADD COLUMN, which is correct.
+        # 4. voice_samples — new table for multi-sample-per-voice support.
+        # 5. Backfill voice_samples from voices.sample_audio_path (labelled
+        #    'Original'). Python-side UUIDs match the rest of the codebase.
+        voice_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(voices)").fetchall()
+        }
+        if "voicebox_engine" not in voice_cols:
+            conn.execute(
+                "ALTER TABLE voices ADD COLUMN voicebox_engine TEXT "
+                "NOT NULL DEFAULT 'qwen3-tts'"
+            )
+        if "voicebox_effect_preset_id" not in voice_cols:
+            conn.execute(
+                "ALTER TABLE voices ADD COLUMN voicebox_effect_preset_id TEXT"
+            )
+
+        seg_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(segments)").fetchall()
+        }
+        if "voicebox_generation_id" not in seg_cols:
+            conn.execute(
+                "ALTER TABLE segments ADD COLUMN voicebox_generation_id TEXT"
+            )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS voice_samples (
+                id TEXT PRIMARY KEY,
+                voice_id TEXT NOT NULL REFERENCES voices(id) ON DELETE CASCADE,
+                sample_path TEXT NOT NULL,
+                voicebox_sample_id TEXT,
+                label TEXT,
+                duration_ms INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (voice_id, sample_path)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_samples_voice_id "
+            "ON voice_samples(voice_id)"
+        )
+
+        # Backfill: every voice with a non-empty sample_audio_path gets a
+        # voice_samples row labelled 'Original'. INSERT OR IGNORE makes the
+        # migration re-runnable (the UNIQUE (voice_id, sample_path) constraint
+        # blocks duplicates on repeated runs).
+        rows = conn.execute(
+            "SELECT id, sample_audio_path, added_at FROM voices "
+            "WHERE sample_audio_path IS NOT NULL AND sample_audio_path != ''"
+        ).fetchall()
+        for row_ in rows:
+            vsid = str(uuid.uuid4())
+            conn.execute(
+                "INSERT OR IGNORE INTO voice_samples "
+                "(id, voice_id, sample_path, label, created_at) "
+                "VALUES (?, ?, ?, 'Original', ?)",
+                (vsid, row_["id"], row_["sample_audio_path"], row_["added_at"])
+            )
 
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
