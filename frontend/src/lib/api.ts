@@ -74,6 +74,73 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// --- Characters + Jobs (§9.3, §9.8) -----------------------------------------
+
+export type EstimatedLineCount = "main" | "supporting" | "minor" | "background";
+
+export interface Character {
+  id: string;
+  project_id: string;
+  name: string;
+  aliases: string[];
+  gender: Gender | null;
+  age_estimate: AgeRange | null;
+  description: string | null;
+  speaking_style: string | null;
+  character_archetype: string | null;
+  first_appearance_chapter: number | null;
+  estimated_line_count: EstimatedLineCount | null;
+  line_count: number | null;
+  is_narrator: boolean;
+  voice_id: string | null;
+  engine_override: EnginePreference | null;
+  notes: string | null;
+}
+
+export interface CharacterUpdate {
+  voice_id?: string | null;
+  engine_override?: EnginePreference | null;
+  notes?: string | null;
+}
+
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "awaiting_response"
+  | "complete"
+  | "failed";
+
+export interface Job {
+  id: string;
+  project_id: string | null;
+  kind: string;
+  status: JobStatus;
+  progress: number;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExtractCastResult {
+  job_id: string;
+  request_path: string;
+  book_text_chars: number;
+  truncated: boolean;
+  warnings: string[];
+}
+
+export interface AutoCastResult {
+  job_id: string;
+  request_path: string;
+  cast_size: number;
+  voice_library_size: number;
+}
+
 // --- Voice library (§7.2) ---------------------------------------------------
 
 export interface Voice {
@@ -224,4 +291,43 @@ export const api = {
 
   deleteVoice: (id: string) =>
     request<void>(`/api/voices/${id}`, { method: "DELETE" }),
+
+  // ---- Characters + Casting ----
+
+  listCharacters: (projectIdOrSlug: string) =>
+    request<Character[]>(`/api/projects/${projectIdOrSlug}/characters`),
+
+  updateCharacter: (id: string, body: CharacterUpdate) =>
+    request<Character>(`/api/characters/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  extractCast: (projectIdOrSlug: string) =>
+    request<ExtractCastResult>(`/api/projects/${projectIdOrSlug}/extract-cast`, {
+      method: "POST",
+    }),
+
+  autoCast: (projectIdOrSlug: string) =>
+    request<AutoCastResult>(`/api/projects/${projectIdOrSlug}/auto-cast`, {
+      method: "POST",
+    }),
+
+  // ---- Jobs ----
+
+  getJob: (id: string) => request<Job>(`/api/jobs/${id}`),
+
+  listProjectJobs: (
+    projectIdOrSlug: string,
+    filter: { status?: JobStatus; kind?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (filter.status) params.set("status", filter.status);
+    if (filter.kind) params.set("kind", filter.kind);
+    const qs = params.toString();
+    return request<Job[]>(
+      `/api/projects/${projectIdOrSlug}/jobs${qs ? "?" + qs : ""}`,
+    );
+  },
 };

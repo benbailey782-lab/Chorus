@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import PendingJobsBanner from "../components/PendingJobsBanner";
 import { api, type IngestResult } from "../lib/api";
 
 export default function Project() {
@@ -53,6 +54,7 @@ export default function Project() {
 
   const p = project.data;
   const needsIngest = (chapters.data?.length ?? 0) === 0;
+  const canCast = !needsIngest;
 
   return (
     <div className="space-y-6">
@@ -63,8 +65,20 @@ export default function Project() {
         <h1 className="text-3xl mt-1">{p.title}</h1>
         {p.author && <div className="text-muted">{p.author}</div>}
         <div className="text-xs mt-1 text-muted">
-          status: {p.status} · mode: {p.mode} · {p.chapter_count} chapters
+          status: {p.status} · {p.chapter_count} chapters
         </div>
+      </div>
+
+      <PendingJobsBanner projectIdOrSlug={idOrSlug} />
+
+      <div className="flex flex-wrap gap-2">
+        <Link
+          to={`/project/${idOrSlug}/cast`}
+          className={canCast ? "btn-primary" : "btn-surface pointer-events-none opacity-50"}
+          aria-disabled={!canCast}
+        >
+          {p.status === "ingesting" ? "Start casting" : "Open casting"}
+        </Link>
       </div>
 
       <section className="card p-4 space-y-3">

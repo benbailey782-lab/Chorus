@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from "react-router-dom";
 
 import BottomNav from "./components/BottomNav";
+import Casting from "./routes/Casting";
 import Library from "./routes/Library";
 import PlayerStub from "./routes/PlayerStub";
 import Project from "./routes/Project";
@@ -37,6 +38,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Library />} />
           <Route path="/project/:idOrSlug" element={<Project />} />
+          <Route path="/project/:idOrSlug/cast" element={<Casting />} />
           <Route path="/voices" element={<VoiceLibrary />} />
           <Route path="/voices/new" element={<VoiceEditor />} />
           <Route path="/voices/:id/edit" element={<VoiceEditor />} />
