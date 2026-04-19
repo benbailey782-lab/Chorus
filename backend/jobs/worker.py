@@ -25,7 +25,11 @@ from backend.nlp import file_drop
 
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_S = 2.0
+# Tightened from 2.0s → 1.0s in Phase 4 (§1B): reduces end-to-end latency
+# between Claude Code dropping a response and the UI seeing the completed job.
+# Don't go below 1s without profiling — the tick holds a DB connection and
+# enumerates every awaiting_response job per pass.
+POLL_INTERVAL_S = 1.0
 
 # Handler signature: (job_dict, parsed_response_json) -> None. May raise.
 Handler = Callable[[dict[str, Any], Any], Awaitable[None]]

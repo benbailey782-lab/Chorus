@@ -56,7 +56,12 @@ instruction to Claude Code:
 > 4. After writing the response, move the request file from
 >    `data/llm_queue/pending/` to `data/llm_queue/completed/`.
 
-Chorus's background worker polls `responses/` every 2 seconds. When it sees
+> **Cadence recommendation (Phase 4):** poll `data/llm_queue/pending/` about
+> every **3 seconds**. Chorus's own worker ticks every 1 second now, so a 3s
+> companion cadence keeps the round-trip under ~4s end-to-end without pegging
+> either side on filesystem watching.
+
+Chorus's background worker polls `responses/` every 1 second. When it sees
 a `response_<job-id>.json` that matches a job in `awaiting_response` state,
 it parses the JSON, validates it, writes the results to the database, marks
 the job `complete`, moves the request file to `completed/`, and deletes the
@@ -97,6 +102,18 @@ ls data/llm_queue/completed/    # historical prompts (audit trail)
 
 All three dirs are `.gitignore`d. Keep `completed/` around — it's the
 file-level audit trail for every LLM exchange the project has ever had.
+
+## Re-ingesting after the Phase 4 chapter-split fix
+
+Any project that was ingested **before** the Phase 4 chapter-splitting fix
+may have false-positive chapter breaks — the old detector treated a bare
+`I` on its own line (italicized emphasis flattened by the EPUB parser) as a
+Roman-numeral chapter heading. After Phase 4, the detector only accepts a
+bare Roman-numeral line as a heading when it has empty-string lines on both
+sides and the doc-wide count of candidates is reasonable.
+
+If `chapter_count` on an existing project is noticeably higher than the
+book's real chapter count, delete the project and re-upload the source.
 
 ## Handler registry
 
