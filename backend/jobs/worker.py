@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
 
 from backend.jobs import repo
 from backend.nlp import file_drop
@@ -34,15 +34,41 @@ POLL_INTERVAL_S = 1.0
 # Handler signature: (job_dict, parsed_response_json) -> None. May raise.
 Handler = Callable[[dict[str, Any], Any], Awaitable[None]]
 
+# Dispatch modes:
+#   - "file_drop": Phase-3/4 pattern. Job sits in awaiting_response; worker
+#     polls data/llm_queue/responses/ for the companion session's JSON reply,
+#     then invokes handler(job, parsed_payload).
+#   - "direct":    Phase-5 pattern. Job sits in queued; worker picks it up on
+#     the next tick, transitions it to running, and invokes
+#     handler(job, job['payload']) without waiting for any external file.
+HandlerMode = Literal["file_drop", "direct"]
+
 _HANDLERS: dict[str, Handler] = {}
+_HANDLER_MODES: dict[str, HandlerMode] = {}
+
+# Per-job locks so a single kind that takes multiple ticks (e.g. a long
+# generate_segment) isn't re-dispatched on every tick.
+_IN_FLIGHT: set[str] = set()
 
 
-def register_handler(kind: str) -> Callable[[Handler], Handler]:
-    """Decorator that binds a handler to a job ``kind``."""
+def register_handler(
+    kind: str, *, mode: HandlerMode = "file_drop"
+) -> Callable[[Handler], Handler]:
+    """Decorator that binds a handler to a job ``kind``.
+
+    ``mode`` selects the dispatch pipeline:
+      * ``"file_drop"`` (default; Phase 3/4 NLP handlers) — worker waits for
+        a ``response_<job_id>.json`` file and invokes the handler with the
+        parsed JSON.
+      * ``"direct"`` (Phase 5 TTS handlers) — worker picks the job up from the
+        ``queued`` queue and invokes the handler with the row's own
+        ``payload`` dict.
+    """
 
     def _register(fn: Handler) -> Handler:
         _HANDLERS[kind] = fn
-        log.debug("registered file-drop handler for kind=%s", kind)
+        _HANDLER_MODES[kind] = mode
+        log.debug("registered %s handler for kind=%s", mode, kind)
         return fn
 
     return _register
@@ -50,6 +76,10 @@ def register_handler(kind: str) -> Callable[[Handler], Handler]:
 
 def registered_kinds() -> list[str]:
     return sorted(_HANDLERS.keys())
+
+
+def _direct_kinds() -> list[str]:
+    return [k for k, m in _HANDLER_MODES.items() if m == "direct"]
 
 
 async def _process_one(job: dict[str, Any]) -> None:
@@ -100,15 +130,60 @@ async def _process_one(job: dict[str, Any]) -> None:
         log.exception("failed to delete response_%s.json", job_id)
 
 
-async def _tick() -> None:
-    awaiting = repo.list_awaiting()
-    if not awaiting:
+async def _process_direct(job: dict[str, Any]) -> None:
+    """Run a direct-mode (non-file-drop) handler.
+
+    Payload comes from the job row itself, not from a response file. The
+    handler is responsible for moving the job to ``complete`` / ``failed``;
+    the worker only marks it ``running`` on pickup and catches exceptions.
+    """
+    job_id = job["id"]
+    kind = job["kind"]
+    handler = _HANDLERS.get(kind)
+    if handler is None:
+        msg = f"no direct handler registered for job kind {kind!r}"
+        log.error("%s (job=%s)", msg, job_id)
+        repo.set_status(job_id, "failed", error=msg)
         return
+
+    # Move to running so the UI sees progress immediately.
+    repo.set_status(job_id, "running", message=f"starting {kind}")
+
+    try:
+        await handler(job, job.get("payload"))
+    except Exception as e:  # noqa: BLE001 — surface any handler failure
+        log.exception("job %s (%s) direct handler failed", job_id, kind)
+        repo.set_status(job_id, "failed", error=f"{type(e).__name__}: {e}")
+        return
+
+    # Handlers typically call repo.set_status(..., "complete", result=...)
+    # themselves (so they can attach per-job result payloads). If a handler
+    # forgot, leave the job in ``running`` — this is a bug surface rather
+    # than something we should silently paper over.
+
+
+async def _tick() -> None:
+    # --- file-drop flow: jobs parked in awaiting_response -----------------
+    awaiting = repo.list_awaiting()
     # Process sequentially — handlers are typically DB-write-bound and this
     # keeps transaction semantics simple. Parallelism isn't needed until
     # attribution in Phase 4+.
     for job in awaiting:
         await _process_one(job)
+
+    # --- direct-dispatch flow: queued jobs for registered direct kinds ----
+    direct_kinds = _direct_kinds()
+    if not direct_kinds:
+        return
+    queued = repo.list_jobs(kinds=direct_kinds, statuses=["queued"], limit=1000)
+    for job in queued:
+        if job["id"] in _IN_FLIGHT:
+            continue
+        _IN_FLIGHT.add(job["id"])
+        try:
+            await _process_direct(job)
+        finally:
+            _IN_FLIGHT.discard(job["id"])
 
 
 async def run_forever(stop_event: asyncio.Event) -> None:

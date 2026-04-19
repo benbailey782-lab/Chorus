@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend import mdns
 from backend.api import (
     characters,
+    generation,
     health,
     jobs as jobs_api,
     projects,
@@ -19,6 +20,7 @@ from backend.config import get_settings
 from backend.db import init_db
 from backend.jobs import worker as job_worker
 # Import handlers so their @register_handler decorators fire before the worker starts.
+from backend.audio import generation as _audio_generation  # noqa: F401
 from backend.nlp import attribute_chapter as _attribute_chapter  # noqa: F401
 from backend.nlp import auto_cast as _auto_cast  # noqa: F401
 from backend.nlp import extract_characters as _extract_characters  # noqa: F401
@@ -106,3 +108,4 @@ app.include_router(characters.router)
 app.include_router(jobs_api.router)
 app.include_router(segments.router)
 app.include_router(pronunciations.router)
+app.include_router(generation.router)

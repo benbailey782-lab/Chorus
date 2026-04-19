@@ -410,3 +410,53 @@ class ChapterMeta(BaseModel):
     pov_character_id: Optional[str] = None
     pov_character_name: Optional[str] = None
     segment_count: int = 0
+
+
+# --- Generation API (Phase 5, §10.5) ---------------------------------------
+
+
+class GenerationEstimateOut(BaseModel):
+    """Seconds-based TTS time estimate.
+
+    ``segments`` is only meaningful for chapter-level estimates; segment-level
+    estimates always return 1. ``human_label`` is preformatted for the UI
+    ("~8 min", "32 s", "~1.3 hr").
+    """
+    seconds: float
+    words: int
+    segments: int
+    wps_factor: float
+    human_label: str
+
+
+class GenerationTriggerOut(BaseModel):
+    """Response from segment-level generate/regenerate POSTs."""
+    job_id: str
+    estimated_seconds: float
+
+
+class ChapterGenerationTriggerOut(BaseModel):
+    """Response from POST /api/chapters/{id}/generate.
+
+    ``job_ids`` is one id per segment that got enqueued; ``segment_count``
+    equals ``len(job_ids)``.
+    """
+    job_ids: list[str]
+    segment_count: int
+    total_estimated_seconds: float
+
+
+class ChapterGenerationStatusOut(BaseModel):
+    """Aggregated generation-state snapshot for the chapter review UI.
+
+    ``in_progress_job_ids`` lists ``generate_segment`` jobs in
+    queued/running state whose payload's ``segment_id`` belongs to this
+    chapter — the UI can use them to poll /api/jobs/{id}.
+    """
+    total: int
+    pending: int
+    generating: int
+    generated: int
+    approved: int
+    error: int
+    in_progress_job_ids: list[str]

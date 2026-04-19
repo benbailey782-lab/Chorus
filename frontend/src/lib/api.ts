@@ -179,8 +179,42 @@ export interface Segment {
   duration_ms: number | null;
   status: string;
   text_modified: boolean;
+  /** Phase-5: ISO-8601 UTC timestamp set when the segment is approved;
+   * null once rejected or while still in pending/generating/generated/error. */
+  approved_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// --- Generation (Phase 5, §10.5) ------------------------------------------
+
+export interface GenerationEstimate {
+  seconds: number;
+  words: number;
+  segments: number;
+  wps_factor: number;
+  human_label: string;
+}
+
+export interface GenerationTriggerResult {
+  job_id: string;
+  estimated_seconds: number;
+}
+
+export interface ChapterGenerationTriggerResult {
+  job_ids: string[];
+  segment_count: number;
+  total_estimated_seconds: number;
+}
+
+export interface ChapterGenerationStatus {
+  total: number;
+  pending: number;
+  generating: number;
+  generated: number;
+  approved: number;
+  error: number;
+  in_progress_job_ids: string[];
 }
 
 export interface SegmentUpdate {
@@ -596,5 +630,53 @@ export const api = {
   listMergedPronunciations: (projectIdOrSlug: string) =>
     request<MergedPronunciationEntry[]>(
       `/api/projects/${projectIdOrSlug}/pronunciations/merged`,
+    ),
+
+  // ---- Generation (Phase 5, §10.5) ----
+
+  generateSegment: (segmentId: string) =>
+    request<GenerationTriggerResult>(
+      `/api/segments/${segmentId}/generate`,
+      { method: "POST" },
+    ),
+
+  regenerateSegment: (segmentId: string) =>
+    request<GenerationTriggerResult>(
+      `/api/segments/${segmentId}/regenerate`,
+      { method: "POST" },
+    ),
+
+  approveSegment: (segmentId: string) =>
+    request<Segment>(`/api/segments/${segmentId}/approve`, {
+      method: "POST",
+    }),
+
+  rejectSegment: (segmentId: string) =>
+    request<Segment>(`/api/segments/${segmentId}/reject`, {
+      method: "POST",
+    }),
+
+  /** Returns a URL string for use in an <audio src>. Does NOT fetch.
+   * Pass `approved=true` to get the approved track. Callers can append
+   * `?t=<timestamp>` to bust the browser cache after regeneration. */
+  segmentAudioUrl: (segmentId: string, approved = false): string =>
+    approved
+      ? `/api/segments/${segmentId}/audio/approved`
+      : `/api/segments/${segmentId}/audio`,
+
+  generateChapter: (chapterId: string) =>
+    request<ChapterGenerationTriggerResult>(
+      `/api/chapters/${chapterId}/generate`,
+      { method: "POST" },
+    ),
+
+  chapterGenerationEstimate: (chapterId: string) =>
+    request<GenerationEstimate>(
+      `/api/chapters/${chapterId}/generation-estimate`,
+    ),
+
+  chapterGenerationStatus: (chapterId: string) =>
+    request<ChapterGenerationStatus>(
+      `/api/chapters/${chapterId}/generation-status`,
     ),
 };
