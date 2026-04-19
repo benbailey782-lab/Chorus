@@ -467,12 +467,33 @@ See §7.2 schema; stored in SQL with JSON columns for arrays.
 | applies_to_character_id | TEXT | Nullable; scope. **Per-character scoping deferred to Phase 7** — the column is reserved but unused in v1. Phase 5 ships global + project scopes only (project overrides global). See `docs/PRONUNCIATION-GUIDE.md`. |
 
 ### 9.7 `playback_state`
+
+One row per project. Rebuilt in schema v7 (Phase 6) — the original v1 shape only carried `chapter_id` + `position_ms`.
+
 | Column | Type | Notes |
 |---|---|---|
-| project_id | TEXT | PK |
-| chapter_id | TEXT | Last playing |
-| position_ms | INTEGER | |
-| updated_at | TEXT | |
+| project_id | TEXT | PK. FK to `projects`, `ON DELETE CASCADE`. |
+| chapter_id | TEXT | Nullable. FK to `chapters`, `ON DELETE SET NULL`. |
+| current_segment_id | TEXT | Nullable. FK to `segments`, `ON DELETE SET NULL`. |
+| position_ms | INTEGER | `NOT NULL DEFAULT 0` |
+| speed | REAL | `NOT NULL DEFAULT 1.0 CHECK (0.25 <= speed <= 4.0)` |
+| updated_at | TEXT | `NOT NULL DEFAULT CURRENT_TIMESTAMP` |
+
+Soft-close (the mini-player × button) keeps the row but sets `chapter_id = NULL` so Continue Listening can still surface a "last listened" anchor for the project.
+
+#### Chapter assembly cache (`chapter_assemblies`)
+
+Added in schema v7. A disk+DB cache of ffmpeg-concatenated chapter audio — one row per chapter that has at least one successful assembly.
+
+| Column | Type | Notes |
+|---|---|---|
+| chapter_id | TEXT | PK. FK to `chapters`, `ON DELETE CASCADE`. |
+| audio_path | TEXT | Absolute path to the cached WAV (`data/projects/<id>/audio/assembled/<chapter_id>.wav`). |
+| duration_ms | INTEGER | From ffprobe after concat + transcode. |
+| segment_hash | TEXT | SHA-256 of sorted `(segment_id, updated_at, audio_path, approved_at)` tuples. Cache invalidation key. |
+| created_at | TEXT | `NOT NULL DEFAULT CURRENT_TIMESTAMP` |
+
+Invalidation happens automatically on any segment generate/regenerate/approve/reject (see `docs/ASSEMBLY-NOTES.md`).
 
 ### 9.8 `jobs`
 | Column | Type | Notes |
@@ -918,7 +939,7 @@ Each phase has a hard exit criterion. Do not advance until it's met.
 - In-app player UI (mobile-first)
 - Playback state tracking
 
-**Exit:** Playable M4B of a full AGoT chapter, works on phone via LAN.
+**Exit:** Playable M4B of a full AGoT chapter, works on phone via LAN. **Status: met for Windows dev** — assembly pipeline (ffmpeg concat + transcode + SHA-256 cache), full Player UI (desktop 3-column + mobile single-column with synced-text bottom sheet), persistent mini-player, Continue Listening, playback state persistence, and auto-advance are all operable end-to-end against silent placeholder audio (`scripts/generate_placeholder_audio.py`). Loudness normalization, ambient soundscape mixing, POV narrator switching, and M4B export ride with Mac + live-Voicebox validation (the "real" exit). See `docs/PLAYER-GUIDE.md` and `docs/ASSEMBLY-NOTES.md`.
 
 ### Phase 7 — Cover Art + Polish (Days 17–18)
 - Cover art generation
