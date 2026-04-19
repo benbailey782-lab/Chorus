@@ -11,6 +11,13 @@ Chorus uses the system `ffmpeg` / `ffprobe` binaries. They must be on `PATH`.
 
 If ffmpeg is not installed, `assemble_chapter` raises `FfmpegMissingError` and the direct-mode job fails with a clear `"ffmpeg not found on PATH"` message. No silent fallback — fail loudly so the operator installs it.
 
+## Windows: ProactorEventLoop required
+
+- **Symptom:** assembly jobs fail with `NotImplementedError` from `base_events._make_subprocess_transport`.
+- **Cause:** Python's default `SelectorEventLoop` on Windows does not support `asyncio.create_subprocess_exec` (used to invoke ffmpeg/ffprobe).
+- **Fix:** `backend/main.py` sets `asyncio.WindowsProactorEventLoopPolicy()` at module import, guarded by `sys.platform == "win32"`. This runs before the FastAPI app and the background worker start.
+- **Operator action:** none — handled automatically. Non-Windows platforms are unaffected (the policy swap is skipped).
+
 ## Pipeline
 
 1. **Load segments** — ordered by `order_index` for the chapter.

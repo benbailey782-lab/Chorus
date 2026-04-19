@@ -118,6 +118,7 @@ Run attribution pass on AGoT book 1 chapter-by-chapter via file-drop; manually i
 - **Audio layout (extended from Phase 5)**: `raw/` + `approved/` + `assembled/<chapter_id>.wav`. Assembled files are a pure disk+DB cache; never committed to git (gitignored via the `data/` rule).
 - **Cache invalidation is forward-looking**: any state change that *will* affect a chapter's audio state (generate, regenerate, approve, reject) invalidates the cached assembly immediately — even before the new audio lands. Next play re-assembles. Helper is best-effort and never raises.
 - **ffmpeg is a required runtime dep** on any machine that plays audio. Fail loudly if missing via `FfmpegMissingError`. Install: `choco install ffmpeg` / `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (Mac).
+- **Windows asyncio**: `backend/main.py` sets `WindowsProactorEventLoopPolicy` because the default `SelectorEventLoop` doesn't support `asyncio.create_subprocess_exec`. Required for ffmpeg-based assembly.
 
 ### Phase-6 frontend conventions
 

@@ -1,5 +1,13 @@
+import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
+
+# Windows uses SelectorEventLoop by default, which does NOT support
+# asyncio.create_subprocess_exec (used by the ffmpeg-based chapter assembly).
+# Switch to ProactorEventLoop before any async subprocess code runs.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
