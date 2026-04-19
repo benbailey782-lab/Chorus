@@ -69,6 +69,7 @@ interface Props {
   currentSegmentId: string | null;
   onSegmentSeek: (ms: number) => void;
   projectTitle?: string;
+  segmentTimingsLoading?: boolean;
 }
 
 export default function MobilePlayerCard({
@@ -77,6 +78,7 @@ export default function MobilePlayerCard({
   currentSegmentId,
   onSegmentSeek,
   projectTitle,
+  segmentTimingsLoading = false,
 }: Props) {
   const [flipped, setFlipped] = useState<boolean>(() => loadFlipPref());
   const [hintSeen, setHintSeen] = useState<boolean>(() => loadHintSeen());
@@ -174,6 +176,7 @@ export default function MobilePlayerCard({
             timings={segmentTimings}
             currentSegmentId={currentSegmentId}
             onSeek={onSegmentSeek}
+            loading={segmentTimingsLoading}
           />
         </div>
       </div>

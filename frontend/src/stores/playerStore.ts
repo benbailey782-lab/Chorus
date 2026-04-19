@@ -32,6 +32,11 @@ export interface PlayerState {
   chapterId: string | null;
   chapter: ChapterMeta | null;
   segmentTimings: SegmentTiming[];
+  /** True from the moment loadChapter starts its timings fetch until the
+   * fetch resolves (success or error). Transcript views can render a
+   * "Loading transcript…" placeholder while this is true instead of
+   * flashing the "no timings" empty state. */
+  segmentTimingsLoading: boolean;
 
   // Playback
   status: PlayerStatus;
@@ -95,6 +100,7 @@ export const usePlayerStore = create<PlayerState>()(
     chapterId: null,
     chapter: null,
     segmentTimings: [],
+    segmentTimingsLoading: false,
     status: "idle",
     positionMs: 0,
     durationMs: 0,
@@ -133,6 +139,7 @@ export const usePlayerStore = create<PlayerState>()(
         chapterId: null,
         chapter: null,
         segmentTimings: [],
+        segmentTimingsLoading: false,
         status: "idle",
         positionMs: 0,
         durationMs: 0,
@@ -147,6 +154,7 @@ export const usePlayerStore = create<PlayerState>()(
         chapterId,
         chapter,
         segmentTimings: timings,
+        segmentTimingsLoading: false,
         positionMs: 0,
         currentSegmentId: null,
         currentSegmentIndex: -1,
@@ -157,6 +165,7 @@ export const usePlayerStore = create<PlayerState>()(
         chapterId: null,
         chapter: null,
         segmentTimings: [],
+        segmentTimingsLoading: false,
         status: "idle",
         positionMs: 0,
         durationMs: 0,

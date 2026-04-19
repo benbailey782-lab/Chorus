@@ -16,6 +16,7 @@ interface Props {
   timings: SegmentTiming[];
   currentSegmentId: string | null;
   onSeek: (ms: number) => void;
+  loading?: boolean;
 }
 
 const MANUAL_SCROLL_GRACE_MS = 5000;
@@ -24,6 +25,7 @@ export default function SyncedTextView({
   timings,
   currentSegmentId,
   onSeek,
+  loading = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lastManualScrollAt = useRef<number>(0);
@@ -55,8 +57,9 @@ export default function SyncedTextView({
   if (timings.length === 0) {
     return (
       <div className="h-full grid place-items-center text-sm text-muted p-6 text-center">
-        No segment timings available. Chapter may still be assembling, or
-        timings were not persisted.
+        {loading
+          ? "Loading transcript…"
+          : "No segment timings available. Chapter may still be assembling, or timings were not persisted."}
       </div>
     );
   }

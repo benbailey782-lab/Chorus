@@ -72,6 +72,7 @@ export default function Player() {
   const storeChapterId = usePlayerStore((s) => s.chapterId);
   const storeProjectIdOrSlug = usePlayerStore((s) => s.projectIdOrSlug);
   const segmentTimings = usePlayerStore((s) => s.segmentTimings);
+  const segmentTimingsLoading = usePlayerStore((s) => s.segmentTimingsLoading);
   const currentSegmentId = usePlayerStore((s) => s.currentSegmentId);
   const missingSegments = usePlayerStore((s) => s.missingSegments);
   const assemblyError = usePlayerStore((s) => s.assemblyError);
@@ -322,6 +323,7 @@ export default function Player() {
               timings={segmentTimings}
               currentSegmentId={currentSegmentId}
               onSeek={(ms) => playerController.seek(ms)}
+              loading={segmentTimingsLoading}
             />
           </div>
         </aside>
@@ -446,6 +448,7 @@ function MobilePlayerLayout({
   const [controlsOpen, setControlsOpen] = useState(false);
 
   const segmentTimings = usePlayerStore((s) => s.segmentTimings);
+  const segmentTimingsLoading = usePlayerStore((s) => s.segmentTimingsLoading);
   const currentSegmentId = usePlayerStore((s) => s.currentSegmentId);
   const storeChapterId = usePlayerStore((s) => s.chapterId);
 
@@ -547,19 +550,62 @@ function MobilePlayerLayout({
       </header>
 
       {/* Flip card fills available space between header and transport row.
-          max-h keeps it ~520px on an iPhone viewport; on shorter viewports
-          the flex-1 lets it shrink. aspect-square is dropped so the card
-          can grow/shrink with the flex column rather than over-constraining
-          the layout. The card itself still renders a centered square image
-          via its internal wrapper. */}
-      <div className="flex-1 min-h-0 px-4 pt-3 pb-2 overflow-hidden">
-        <div className="w-full h-full max-h-[520px] mx-auto">
+          Phase6.7-fix: prior layout had `max-h-[520px]` which left a dead
+          strip on iPhone 15 Pro Max (932px viewport) — the card clamped at
+          520px while the column had room to breathe. We now let the outer
+          flex-1 grow to ALL available height, and center-content a square
+          card inside. The card picks the smaller of its width-based or
+          height-based constraint (aspect-square + max-h-full) so:
+            - iPhone SE 375×667: card shrinks to fit the cramped column
+            - iPhone 14 375×812: card ~360-400px square
+            - iPhone 15 Pro Max 430×932: card grows to ~500-560px square
+          Desktop layout (min-width:1024px) is unaffected — it's a
+          different branch above. */}
+      {/*
+        Flip card container — phase6.7-fix.
+
+        Before: outer div had `h-full max-h-[520px]` which clamped the
+        card at 520px, leaving a dead strip above the transport row on
+        tall viewports (iPhone 15 Pro Max at 932px had ~60-80px of
+        wasted space). Also `overflow-hidden` + height-unbounded child
+        caused the card to draw outside the container on shorter
+        viewports.
+
+        After: the container is a centered flex box with
+        `containerType: size` so the inner square can size via
+        container-query units `cqmin` — which picks the SMALLER of the
+        container's width or height. That's exactly the "largest square
+        that fits" constraint. Result:
+          - iPhone SE 375×667 (column ~320px tall, ~343px wide after
+            padding): card = 320px square (height-bound).
+          - iPhone 14 375×812 (column ~440px tall, 343px wide): card
+            = 343px square (width-bound).
+          - iPhone 15 Pro Max 430×932 (column ~580px tall, 398px wide):
+            card = 398px square (width-bound, no dead space above/below
+            — the flex `items-center` centers the card vertically).
+
+        MobilePlayerCard already sets `aspect-square` on its inner flip
+        container, so we only need to size the wrapper correctly.
+      */}
+      <div
+        className="flex-1 min-h-0 flex items-center justify-center px-4 pt-3 pb-2"
+        style={{ containerType: "size" }}
+      >
+        <div
+          className="aspect-square"
+          style={{
+            width: "min(100cqw, 100cqh)",
+            maxWidth: "100%",
+            maxHeight: "100%",
+          }}
+        >
           <MobilePlayerCard
             chapter={cardChapter}
             segmentTimings={segmentTimings}
             currentSegmentId={currentSegmentId}
             onSegmentSeek={(ms) => playerController.seek(ms)}
             projectTitle={projectTitle}
+            segmentTimingsLoading={segmentTimingsLoading}
           />
         </div>
       </div>

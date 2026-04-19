@@ -15,7 +15,7 @@
  * Not elegant but keeps the controller singleton-simple.
  */
 
-import { api, type Chapter, type ChapterMeta, type SegmentTiming } from "./api";
+import { api, type Chapter, type ChapterMeta } from "./api";
 import { usePlayerStore } from "../stores/playerStore";
 
 class PlayerController {
@@ -95,11 +95,14 @@ class PlayerController {
 
     // 1. Store project + clear per-load state. `chapter` is wiped here so the
     //    MiniPlayer doesn't show a stale title from the previous chapter while
-    //    the metadata fetch below is in flight.
+    //    the metadata fetch below is in flight. `segmentTimings` is wiped so
+    //    the transcript doesn't flash the previous chapter while loading.
     set({
       projectIdOrSlug,
       chapterId,
       chapter: null,
+      segmentTimings: [],
+      segmentTimingsLoading: true,
       status: "loading",
       positionMs: 0,
       durationMs: 0,
@@ -115,6 +118,35 @@ class PlayerController {
     //     real title ("Chapter 3 — Bran") instead of "Loading…". Non-fatal if
     //     it fails — UI falls back to "Chapter N" or a generic placeholder.
     void this.fetchChapterMeta(chapterId);
+
+    // 1b. Fetch segment timings IMMEDIATELY — BEFORE the assembly poll.
+    //     This guarantees the transcript populates as soon as timings
+    //     arrive, regardless of whether audio is ready yet. Prior to
+    //     phase6.7-fix this lived AFTER the assembly poll, so any failure
+    //     in triggerAssembly / pollAssembly / or the cache-hit path
+    //     short-circuit could leave segmentTimings empty.
+    //     Fire-and-forget so the audio pipeline below can proceed in
+    //     parallel with the timings fetch — the transcript view will
+    //     re-render when the promise resolves.
+    void api
+      .chapterSegmentTimings(chapterId)
+      .then((timings) => {
+        // Late-resolution guard: only apply if the store still points at
+        // this chapter (user may have switched chapters while we waited).
+        if (usePlayerStore.getState().chapterId !== chapterId) return;
+        usePlayerStore.setState({
+          segmentTimings: timings,
+          segmentTimingsLoading: false,
+        });
+      })
+      .catch((err: unknown) => {
+        console.warn("[player] failed to fetch segment timings", err);
+        if (usePlayerStore.getState().chapterId !== chapterId) return;
+        usePlayerStore.setState({
+          segmentTimings: [],
+          segmentTimingsLoading: false,
+        });
+      });
 
     // 2. Try to restore the user's last position — but only if the saved
     //    row points at THIS chapter. Users switching chapters should not
@@ -146,22 +178,12 @@ class PlayerController {
       if (!ok) return;
     }
 
-    // 5. Fetch timings. Missing timings aren't fatal — UI just loses
-    //    segment highlighting, playback continues.
-    let timings: SegmentTiming[] = [];
-    try {
-      timings = await api.chapterSegmentTimings(chapterId);
-    } catch {
-      /* ignore — no highlights */
-    }
-    set({ segmentTimings: timings });
-
-    // 6. Wire audio src.
+    // 5. Wire audio src.
     const audio = this.ensureAudio();
     audio.src = api.chapterAudioUrl(chapterId);
     audio.load();
 
-    // 7. On metadata, restore position (one-shot listener). Audio stays
+    // 6. On metadata, restore position (one-shot listener). Audio stays
     //    paused — the user explicitly clicks play to resume. We push the
     //    restored position into the store immediately so the scrubber
     //    reflects it before the audio element's first `timeupdate` fires,
