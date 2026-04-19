@@ -514,6 +514,26 @@ export interface VoiceboxConfigOut {
   configured: boolean;
 }
 
+/** Phase-5R Commit 6: GET /api/voicebox/models row. Mirrors
+ * `backend.schemas.ModelStatusOut`. `status` is one of
+ * `loaded|downloading|downloaded|missing` derived server-side. */
+export interface ModelStatus {
+  name: string;
+  loaded: boolean;
+  downloaded: boolean;
+  status: string | null;
+}
+
+/** Phase-5R Commit 6: GET /api/voicebox/models/{name}/progress.
+ * `status` is one of `loading|downloading|complete|loaded|error|idle`
+ * as surfaced by Voicebox. `progress` is normalized to 0.0-1.0. */
+export interface ModelProgress {
+  model_name: string;
+  status: string;
+  progress: number;
+  message: string | null;
+}
+
 export interface VoiceFilter {
   pool?: Pool;
   gender?: Gender;
@@ -602,6 +622,34 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }),
+
+  /** Phase-5R Commit 6: catalog of Voicebox models + their loaded /
+   * downloaded state. Polled by GenerateModal pre-flight; cached for
+   * 30s under VoiceboxStatusBanner so the "(model loaded)" suffix is
+   * close to live without hammering Voicebox. */
+  listVoiceboxModels: () =>
+    request<ModelStatus[]>("/api/voicebox/models"),
+
+  /** Polled every 1s by ModelLoadingBanner while a load is in flight. */
+  voiceboxModelProgress: (modelName: string) =>
+    request<ModelProgress>(
+      `/api/voicebox/models/${encodeURIComponent(modelName)}/progress`,
+    ),
+
+  /** Returns 202 immediately — Voicebox does the actual load in the
+   * background (2-4 minutes for cold first load). Caller should set the
+   * modelLoadingStore so the global banner appears, then poll progress. */
+  loadVoiceboxModel: (modelName: string) =>
+    request<void>(
+      `/api/voicebox/models/${encodeURIComponent(modelName)}/load`,
+      { method: "POST" },
+    ),
+
+  unloadVoiceboxModel: (modelName: string) =>
+    request<void>(
+      `/api/voicebox/models/${encodeURIComponent(modelName)}/unload`,
+      { method: "POST" },
+    ),
 
   createVoice: async (body: VoiceCreate, audio?: File | null) => {
     const fd = new FormData();

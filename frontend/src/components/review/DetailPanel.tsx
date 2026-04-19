@@ -332,6 +332,37 @@ export default function DetailPanel({
     },
   });
 
+  // Phase-5R Commit 6: Retry hits `/retry` against the segment's prior
+  // voicebox_generation_id. If the segment never had one (no
+  // voicebox_generation_id yet), backend returns 400 — we fall back to
+  // a fresh `generate` call so the user doesn't have to notice the
+  // distinction.
+  const retryMut = useMutation({
+    mutationFn: async () => {
+      if (!segment) throw new Error("No segment selected");
+      try {
+        return await api.retrySegment(segment.id);
+      } catch (err) {
+        // Backend: 400 when there's no prior generation to retry. Fall
+        // back to a regular generate.
+        const msg = err instanceof Error ? err.message : "";
+        if (/^400\b/.test(msg)) {
+          return api.generateSegment(segment.id);
+        }
+        throw err;
+      }
+    },
+    onSuccess: () => {
+      toast({ kind: "success", message: "Retry queued." });
+      invalidateAudio();
+    },
+    onError: (err: unknown) => {
+      const message =
+        err instanceof Error && err.message ? err.message : "Retry failed.";
+      toast({ kind: "error", message });
+    },
+  });
+
   const cancel = useCallback(() => {
     setDraft(initialDraft);
   }, [initialDraft]);
@@ -571,11 +602,13 @@ export default function DetailPanel({
           onRegenerate={() => regenerateMut.mutate()}
           onApprove={() => approveMut.mutate()}
           onReject={() => rejectMut.mutate()}
+          onRetry={() => retryMut.mutate()}
           busy={{
             generate: generateMut.isPending,
             regenerate: regenerateMut.isPending,
             approve: approveMut.isPending,
             reject: rejectMut.isPending,
+            retry: retryMut.isPending,
           }}
         />
       </div>
@@ -621,11 +654,16 @@ interface AudioSectionProps {
   onRegenerate: () => void;
   onApprove: () => void;
   onReject: () => void;
+  /** Phase-5R Commit 6: retry hits /segments/:id/retry against the prior
+   * voicebox_generation_id. Distinct from onRegenerate which starts a
+   * fresh generation from scratch. */
+  onRetry: () => void;
   busy: {
     generate: boolean;
     regenerate: boolean;
     approve: boolean;
     reject: boolean;
+    retry: boolean;
   };
 }
 
@@ -656,6 +694,7 @@ function AudioSection({
   onRegenerate,
   onApprove,
   onReject,
+  onRetry,
   busy,
 }: AudioSectionProps) {
   const state = getSegmentAudioState(segment);
@@ -694,7 +733,22 @@ function AudioSection({
             {new Date(segment.updated_at).toLocaleString()}
           </span>
         )}
-        {durationLabel && <span>· {durationLabel}</span>}
+        {durationLabel && <span>{"\u00b7"} {durationLabel}</span>}
+        {/* Phase-5R Commit 6: surface the Voicebox generation id so the
+            operator can correlate a local segment with a Voicebox-side
+            /generate/{id} record when debugging. Truncated to 8 chars +
+            ellipsis; full id in the tooltip. Only shown once the
+            segment has actually been generated/approved. */}
+        {(state === "generated" || state === "approved") &&
+          segment.voicebox_generation_id && (
+            <span
+              title={segment.voicebox_generation_id}
+              className="truncate"
+            >
+              {"\u00b7"} vb:{segment.voicebox_generation_id.slice(0, 8)}
+              {"\u2026"}
+            </span>
+          )}
       </div>
 
       {audioUrl && (
@@ -787,14 +841,16 @@ function AudioSection({
         {state === "error" && (
           <button
             type="button"
-            onClick={onRegenerate}
-            disabled={!voiceboxReachable || busy.regenerate}
+            onClick={onRetry}
+            disabled={!voiceboxReachable || busy.retry}
             className="btn-primary min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed"
             title={
-              voiceboxReachable ? "Retry generation" : "Voicebox must be online"
+              voiceboxReachable
+                ? "Retry the failed generation"
+                : "Voicebox must be online"
             }
           >
-            {busy.regenerate ? "Queuing…" : "Retry"}
+            {busy.retry ? "Queuing\u2026" : "Retry"}
           </button>
         )}
       </div>

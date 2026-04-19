@@ -293,6 +293,31 @@ class VoiceboxConfigOut(BaseModel):
     configured: bool
 
 
+class ModelStatusOut(BaseModel):
+    """GET /api/voicebox/models row. Mirrors
+    :class:`backend.voices.voicebox_client.ModelStatus` but stripped to the
+    fields the UI needs (display_name, size_mb, hf_repo_id are not
+    surfaced yet — add them if the Voicebox admin UI is ever implemented
+    in Chorus)."""
+    name: str
+    loaded: bool
+    downloaded: bool
+    status: Optional[str] = None
+
+
+class ModelProgressOut(BaseModel):
+    """GET /api/voicebox/models/{model_name}/progress.
+
+    ``status`` is one of ``loading|downloading|complete|loaded|error|idle``
+    as surfaced by Voicebox; the UI switches on the string to drive the
+    banner's terminal states. ``progress`` is normalized to 0.0-1.0 on
+    the backend side regardless of whether Voicebox emitted 0-100."""
+    model_name: str
+    status: str
+    progress: float
+    message: Optional[str] = None
+
+
 # --- Characters (§9.3) ------------------------------------------------------
 
 EstimatedLineCount = Literal["main", "supporting", "minor", "background"]

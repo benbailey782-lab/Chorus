@@ -3,6 +3,8 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import BottomNav from "./BottomNav";
 import ToastContainer from "./Toast";
 import MiniPlayer from "./player/MiniPlayer";
+import ModelLoadingBanner from "./voicebox/ModelLoadingBanner";
+import { useModelLoadingStore } from "../stores/modelLoadingStore";
 
 /**
  * Root shell for every route (Phase 6, commit 6).
@@ -29,6 +31,13 @@ export default function Layout() {
   // full-screen transport controls already own the UI. Showing both would
   // duplicate play/pause and look cluttered on mobile.
   const onFullPlayer = location.pathname.startsWith("/play/");
+
+  // Phase-5R Commit 6: surface Voicebox model-load progress whenever any
+  // page kicks a load. Read at Layout level so the banner lives above the
+  // route Outlet — if it moved inside per-page banners it would unmount
+  // on navigation and lose the polling query.
+  const loadingModelName = useModelLoadingStore((s) => s.modelName);
+  const setLoadingModelName = useModelLoadingStore((s) => s.setModelName);
 
   return (
     <div className="min-h-full flex flex-col">
@@ -84,6 +93,28 @@ export default function Layout() {
             : "calc(4rem + env(safe-area-inset-bottom, 0px))",
         }}
       >
+        {loadingModelName && (
+          <div className="mb-3">
+            <ModelLoadingBanner
+              modelName={loadingModelName}
+              onComplete={() => {
+                // The banner clears the store itself after its success
+                // flash; this callback is here so future pages can plug
+                // in "now actually trigger generation" flows if we pivot
+                // to the "wait for banner complete" pattern.
+              }}
+              onError={(msg) => {
+                // Error banner stays until the user dismisses it; we
+                // don't auto-clear on error to give them time to read.
+                // This void is intentional — parent logic currently has
+                // no work to do beyond what the banner already renders.
+                void msg;
+                void setLoadingModelName;
+              }}
+            />
+          </div>
+        )}
+
         <Outlet />
       </main>
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   api,
@@ -7,6 +7,7 @@ import {
   type VoiceboxHealth,
 } from "../../lib/api";
 import { useToast } from "../../lib/toast";
+import { useModelLoadingStore } from "../../stores/modelLoadingStore";
 
 interface Props {
   open: boolean;
@@ -47,12 +48,52 @@ export default function GenerateModal({
         ? "unreachable"
         : "none";
 
+  // Phase-5R Commit 6 pre-flight: probe which models are loaded so we can
+  // warn the user if their click will trigger a 2-4-minute cold load. We
+  // only run this when the modal is open + Voicebox is reachable to avoid
+  // spurious network traffic. Results are cached 30s at the query layer,
+  // so opening/closing the modal repeatedly is cheap.
+  const modelsQuery = useQuery({
+    queryKey: ["voicebox-models"],
+    queryFn: api.listVoiceboxModels,
+    enabled: open && reachable,
+    staleTime: 30_000,
+  });
+
+  // Detect whether any model is loaded. This is the simple heuristic
+  // called out in the Commit-6 scope: "assume one model per chapter
+  // (most common case)." If ANY model is loaded we assume the generation
+  // will be a fast path; if NONE is loaded we show the cold-load warning.
+  // Backend's `ensure_model_loaded` handles the actual wait, so this is
+  // purely an informational pre-flight — not gating.
+  const anyModelLoaded = (modelsQuery.data ?? []).some((m) => m.loaded);
+  const noModelLoaded =
+    reachable && modelsQuery.isSuccess && !anyModelLoaded;
+
+  const setLoadingModelName = useModelLoadingStore((s) => s.setModelName);
+
   const canGenerate = reachable && (estimate?.segments ?? 0) > 0 && !busy;
 
   async function doGenerate() {
     if (!canGenerate) return;
     setBusy(true);
     try {
+      // Phase-5R Commit 6: if we know no model is loaded, surface the
+      // global ModelLoadingBanner BEFORE kicking generation. The backend
+      // will lazy-load the right model via `ensure_model_loaded`, so we
+      // don't need to call `loadVoiceboxModel` here — setting the store
+      // name is enough to make the banner poll progress. We pick the
+      // first downloaded model name from the catalog; if none is
+      // downloaded we fall back to a generic label so the banner at
+      // least mounts and the user sees the load is in flight.
+      if (noModelLoaded) {
+        const candidate =
+          (modelsQuery.data ?? []).find((m) => m.downloaded)?.name ??
+          (modelsQuery.data ?? [])[0]?.name ??
+          "qwen-tts-1.7B";
+        setLoadingModelName(candidate);
+      }
+
       const result = await api.generateChapter(chapterId);
       toast({
         kind: "success",
@@ -188,6 +229,25 @@ export default function GenerateModal({
         {!voiceboxHealth && (
           <div className="text-[11px] text-muted">
             Checking Voicebox status…
+          </div>
+        )}
+
+        {/* Model pre-flight warning (Phase-5R Commit 6) — only shown
+             when Voicebox is reachable but no model is currently loaded.
+             The actual load happens server-side via ensure_model_loaded;
+             this is purely an informational heads-up. */}
+        {noModelLoaded && (
+          <div
+            className="chip text-[11px] inline-flex items-center gap-1.5"
+            style={{ color: "#F59E0B", borderColor: "#F59E0B" }}
+            title="No TTS model is currently loaded on Voicebox."
+          >
+            <span
+              aria-hidden="true"
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: "#F59E0B" }}
+            />
+            TTS model needs to load first (~2-4 minutes the first time)
           </div>
         )}
 

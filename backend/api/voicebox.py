@@ -20,12 +20,17 @@ store).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from backend.schemas import (
+    ModelProgressOut,
+    ModelStatusOut,
     VoiceboxConfigOut,
     VoiceboxConfigUpdate,
     VoiceboxHealthOut,
@@ -33,6 +38,8 @@ from backend.schemas import (
     VoiceboxTestConnectionResponse,
 )
 from backend.voices import voicebox_client, voicebox_config_store
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/voicebox", tags=["voicebox"])
 
@@ -230,3 +237,144 @@ async def update_voicebox_config(body: VoiceboxConfigUpdate) -> VoiceboxConfigOu
         enabled=eff_enabled,
         configured=bool(eff_url.strip()),
     )
+
+
+# ---------------------------------------------------------------------------
+# Model status + progress + load/unload (Phase-5R Commit 6)
+# ---------------------------------------------------------------------------
+#
+# These proxy the underlying Voicebox ``/models/*`` endpoints through the
+# typed ``voicebox_client`` so the frontend has a single backend origin to
+# talk to (matching every other Voicebox surface). The frontend's
+# ``ModelLoadingBanner`` polls ``/api/voicebox/models/{name}/progress`` while
+# a load is in-flight; the Chapter-Review generation pre-flight check uses
+# ``/api/voicebox/models`` to decide whether to surface a "first load may
+# take 2-4 minutes" warning before kicking a chapter generation.
+#
+# When Voicebox is disabled or unreachable we translate the client's
+# typed exceptions into appropriate HTTP status codes so the UI can render
+# a helpful message (503 for disabled/unreachable so the browser fetch
+# error surface lines up with the VoiceboxStatusBanner messaging).
+
+
+def _voicebox_http_error(e: voicebox_client.VoiceboxError) -> HTTPException:
+    """Map a typed Voicebox client error → FastAPI HTTPException.
+
+    * Not configured / not enabled → 503 (the saved config won't let us talk
+      to Voicebox; UI should point the operator at Settings).
+    * Unreachable / timeout → 503 (Voicebox itself is down).
+    * API error → 502 (Voicebox responded but returned an error payload;
+      forward the status in the detail so the operator can see it).
+    * Anything else → 502 fallback.
+    """
+    if isinstance(e, voicebox_client.VoiceboxNotConfigured):
+        return HTTPException(status_code=503, detail=f"Voicebox not configured: {e}")
+    if isinstance(e, voicebox_client.VoiceboxNotEnabled):
+        return HTTPException(status_code=503, detail=f"Voicebox disabled: {e}")
+    if isinstance(
+        e,
+        (voicebox_client.VoiceboxUnreachableError, voicebox_client.VoiceboxTimeoutError),
+    ):
+        return HTTPException(status_code=503, detail=f"Voicebox unreachable: {e}")
+    if isinstance(e, voicebox_client.VoiceboxAPIError):
+        return HTTPException(status_code=502, detail=f"Voicebox API error: {e}")
+    return HTTPException(status_code=502, detail=f"Voicebox error: {e}")
+
+
+@router.get("/models", response_model=list[ModelStatusOut])
+async def list_voicebox_models() -> list[ModelStatusOut]:
+    """List Voicebox models + their loaded/downloaded state.
+
+    Returns the full models catalog. Empty list is valid (no models
+    downloaded yet). Callers that only care about a specific model should
+    still request this list and filter client-side — Voicebox does not
+    expose a by-name probe.
+    """
+    try:
+        rows = await voicebox_client.list_models()
+    except voicebox_client.VoiceboxError as e:
+        raise _voicebox_http_error(e) from e
+    return [
+        ModelStatusOut(
+            name=m.name,
+            loaded=m.loaded,
+            downloaded=m.downloaded,
+            status=m.status,
+        )
+        for m in rows
+    ]
+
+
+@router.get(
+    "/models/{model_name}/progress",
+    response_model=ModelProgressOut,
+)
+async def get_voicebox_model_progress(model_name: str) -> ModelProgressOut:
+    """Return the current progress snapshot for a model load/download.
+
+    Polled once per second by the ModelLoadingBanner while a load is in
+    flight. Status vocabulary:
+    ``loading|downloading|complete|loaded|error|idle``.
+    """
+    try:
+        p = await voicebox_client.get_model_progress(model_name)
+    except voicebox_client.VoiceboxError as e:
+        raise _voicebox_http_error(e) from e
+    return ModelProgressOut(
+        model_name=p.model_name,
+        status=p.status,
+        progress=p.progress,
+        message=p.message,
+    )
+
+
+@router.post("/models/{model_name}/load", status_code=202)
+async def load_voicebox_model(model_name: str) -> Response:
+    """Kick a Voicebox model load and return 202 immediately.
+
+    The actual load runs on Voicebox's side (can take 2-4 minutes for a
+    cold model). UI should immediately start polling
+    ``/models/{name}/progress`` via the ModelLoadingBanner.
+
+    We fire-and-forget the POST so the HTTP response here doesn't have to
+    wait for the load to finish — ``asyncio.create_task`` keeps the
+    coroutine alive until Voicebox replies. Any exception raised by the
+    task is logged but swallowed (the UI sees the real state via
+    progress polling).
+    """
+
+    async def _kick() -> None:
+        try:
+            await voicebox_client.load_model(model_name)
+        except voicebox_client.VoiceboxError as exc:
+            log.warning(
+                "Voicebox load_model(%s) failed in background: %s",
+                model_name,
+                exc,
+            )
+
+    # Validate config eagerly so an unconfigured Voicebox returns 503 here
+    # instead of silently swallowing the failure in the background task.
+    base, enabled = voicebox_config_store.get_effective()
+    if not base.strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Voicebox not configured. Set a URL in Settings > Voicebox.",
+        )
+    if not enabled:
+        raise HTTPException(status_code=503, detail="Voicebox disabled.")
+
+    asyncio.create_task(_kick())
+    return Response(status_code=202)
+
+
+@router.post("/models/{model_name}/unload", status_code=204)
+async def unload_voicebox_model(model_name: str) -> Response:
+    """Unload a Voicebox model. Blocks until Voicebox returns — unload is
+    fast (no disk work), so we don't need the fire-and-forget dance that
+    load_model uses."""
+    try:
+        await voicebox_client.unload_model(model_name)
+    except voicebox_client.VoiceboxError as e:
+        raise _voicebox_http_error(e) from e
+    return Response(status_code=204)
