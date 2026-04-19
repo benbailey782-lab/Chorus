@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     voicebox_output_sample_rate: int = 44100
     # Forward-compat: Phase 5 runs serial; when Voicebox proves stable on Mac we can bump to 2+.
     voicebox_max_concurrent_generations: int = 1
+    # Phase 5 remediation — default model auto-loaded on first generation
+    # if no model is already loaded on Voicebox. Matches the key used by
+    # ``GET /models/status`` on Voicebox v0.4.0 (Qwen3-TTS 1.7B).
+    voicebox_default_model: str = "qwen-tts-1.7B"
+    # Polling deadline for generate_and_wait(). Long default — Voicebox
+    # can take several minutes on CPU-only Macs.
+    voicebox_generation_timeout_seconds: int = 300
 
     host: str = "0.0.0.0"
     port: int = 8765

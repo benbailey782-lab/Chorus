@@ -55,10 +55,8 @@ async def get_voicebox_status() -> VoiceboxHealthOut:
     base_url, enabled = voicebox_config_store.get_effective()
     configured = bool(base_url.strip())
 
-    # Not configured → short-circuit before calling the client (which
-    # would currently raise VoiceboxNotEnabled if disabled or return an
-    # "URL not configured" VoiceboxHealth if enabled-without-URL).
-    if not configured or not enabled:
+    # Not configured → short-circuit before calling the client.
+    if not configured:
         return VoiceboxHealthOut(
             configured=configured,
             enabled=enabled,
@@ -71,14 +69,15 @@ async def get_voicebox_status() -> VoiceboxHealthOut:
             error=None,
         )
 
+    # Configured but disabled → still probe so the UI can show the
+    # actual reachability state of the saved URL (helps the operator
+    # notice a dead Voicebox before flipping the toggle).
     try:
-        health = await voicebox_client.health_check()
-    except voicebox_client.VoiceboxNotEnabled:
-        # Race: enabled flag flipped between the store read and the
-        # client read. Surface as disabled rather than 500.
+        health = await voicebox_client.health_check(base_url=base_url)
+    except voicebox_client.VoiceboxNotConfigured:
         return VoiceboxHealthOut(
             configured=configured,
-            enabled=False,
+            enabled=enabled,
             reachable=False,
             base_url=base_url,
             version=None,
@@ -87,18 +86,16 @@ async def get_voicebox_status() -> VoiceboxHealthOut:
             model_loaded=False,
             error=None,
         )
+
     return VoiceboxHealthOut(
         configured=configured,
-        enabled=health.enabled,
+        enabled=enabled,
         reachable=health.reachable,
         base_url=health.base_url,
         version=health.version,
         profile_count=health.profile_count,
         available_engines=health.available_engines,
-        # health_check() doesn't currently parse model_loaded — will be
-        # populated once the voicebox_client rewrite (Commit 3) wires it
-        # through. Defaulting to False keeps the contract stable.
-        model_loaded=False,
+        model_loaded=health.model_loaded,
         error=health.error,
     )
 
