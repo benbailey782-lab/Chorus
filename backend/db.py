@@ -5,7 +5,7 @@ from typing import Iterator
 
 from backend.config import get_settings
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -99,22 +99,35 @@ CREATE TABLE IF NOT EXISTS voices (
 
 CREATE INDEX IF NOT EXISTS idx_voices_pool ON voices(pool);
 
+-- Segments (§9.5). Phase 4 rebuild: widens render_mode to the full §6
+-- vocabulary, adds notes / voice_override_id / created_at / updated_at /
+-- indexes, and tightens confidence to INTEGER (0-100) matching the prompt
+-- output shape.
 CREATE TABLE IF NOT EXISTS segments (
     id TEXT PRIMARY KEY,
     chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
     order_index INTEGER NOT NULL,
-    character_id TEXT,
-    render_mode TEXT NOT NULL DEFAULT 'prose',
-    emotion_tags_json TEXT,
     text TEXT NOT NULL,
-    confidence REAL,
+    render_mode TEXT NOT NULL DEFAULT 'prose'
+        CHECK (render_mode IN (
+            'prose','dialogue','epigraph','letter','poetry',
+            'song_lyrics','emphasis','thought','chapter_heading'
+        )),
+    emotion_tags_json TEXT NOT NULL DEFAULT '[]',
+    confidence INTEGER,
+    notes TEXT,
+    voice_override_id TEXT REFERENCES voices(id) ON DELETE SET NULL,
     audio_path TEXT,
     duration_ms INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(chapter_id, order_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_segments_chapter ON segments(chapter_id);
+CREATE INDEX IF NOT EXISTS idx_segments_character ON segments(character_id);
 
 CREATE TABLE IF NOT EXISTS pronunciations (
     id TEXT PRIMARY KEY,
@@ -229,6 +242,31 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         if "completed_at" not in existing_cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN completed_at TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+
+    if current < 4:
+        # Phase 4 rebuilds `segments` with the full §6 render_mode CHECK,
+        # integer confidence, notes, voice_override_id, and timestamp columns.
+        # Guard: abort if anything has written to segments already (dev DB is
+        # empty; this is insurance for future re-runs on populated data).
+        seg_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM segments"
+        ).fetchone()["c"]
+        if seg_count > 0:
+            raise MigrationAborted(
+                f"Refusing to migrate: `segments` table already has {seg_count} "
+                "row(s). The Phase 4 rebuild changes render_mode CHECK + confidence "
+                "type. Back up data/chorus.db and inspect the rows before retrying."
+            )
+        conn.execute("DROP TABLE segments")
+        conn.executescript(SCHEMA_SQL)
+        # chapters.pov_character_id was added in Phase 0 so this is a no-op
+        # on an existing DB — but add-if-missing makes the migration
+        # idempotent for hand-crafted test DBs.
+        existing_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(chapters)").fetchall()
+        }
+        if "pov_character_id" not in existing_cols:
+            conn.execute("ALTER TABLE chapters ADD COLUMN pov_character_id TEXT")
 
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
