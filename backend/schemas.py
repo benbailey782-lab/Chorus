@@ -162,11 +162,28 @@ class VoicePoolCounts(BaseModel):
 
 class VoiceboxStatusOut(BaseModel):
     """GET /api/voices/voicebox/status — surfaced to the UI so it can hide or
-    disable generation-dependent controls without making the user guess."""
+    disable generation-dependent controls without making the user guess.
+
+    Deprecated in Phase 5 — kept for backwards compat. The canonical endpoint
+    is now ``GET /api/voicebox/status`` returning :class:`VoiceboxHealthOut`.
+    """
     enabled: bool
     reachable: Optional[bool] = None  # null when disabled
     base_url: str
     note: str
+
+
+class VoiceboxHealthOut(BaseModel):
+    """GET /api/voicebox/status — richer Phase-5 shape with version,
+    profile count, and available engines. ``error`` is populated when
+    enabled=True but reachable=False."""
+    enabled: bool
+    reachable: bool
+    base_url: str
+    version: Optional[str] = None
+    profile_count: Optional[int] = None
+    available_engines: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
 
 
 # --- Characters (§9.3) ------------------------------------------------------

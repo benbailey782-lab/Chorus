@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import mdns
-from backend.api import characters, health, jobs as jobs_api, projects, segments, voices
+from backend.api import characters, health, jobs as jobs_api, projects, segments, voicebox, voices
 from backend.config import get_settings
 from backend.db import init_db
 from backend.jobs import worker as job_worker
@@ -91,6 +91,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(projects.router)
 app.include_router(voices.router)
+app.include_router(voicebox.router)
 app.include_router(characters.router)
 app.include_router(jobs_api.router)
 app.include_router(segments.router)

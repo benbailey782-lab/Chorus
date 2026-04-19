@@ -8,8 +8,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     anthropic_api_key: str = ""
-    voicebox_base_url: str = "http://localhost:5173"
+    # Default 8090 — avoids collision with Vite (5173) and Chorus backend (8765).
+    # Voicebox's actual default is TBD; this is overridable via VOICEBOX_BASE_URL env var.
+    voicebox_base_url: str = "http://localhost:8090"
     voicebox_enabled: bool = False
+    voicebox_timeout_seconds: int = 120
+    voicebox_default_wps: float = 2.5  # words per second for time estimates
+    voicebox_output_sample_rate: int = 44100
+    # Forward-compat: Phase 5 runs serial; when Voicebox proves stable on Mac we can bump to 2+.
+    voicebox_max_concurrent_generations: int = 1
 
     host: str = "0.0.0.0"
     port: int = 8765

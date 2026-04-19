@@ -288,6 +288,17 @@ export interface VoiceboxStatus {
   note: string;
 }
 
+/** Phase-5 richer health shape returned by GET /api/voicebox/status. */
+export interface VoiceboxHealth {
+  enabled: boolean;
+  reachable: boolean;
+  base_url: string;
+  version: string | null;
+  profile_count: number | null;
+  available_engines: string[];
+  error: string | null;
+}
+
 export interface VoiceFilter {
   pool?: Pool;
   gender?: Gender;
@@ -350,7 +361,15 @@ export const api = {
 
   voicePoolCounts: () => request<VoicePoolCounts>("/api/voices/pools/summary"),
 
+  /**
+   * @deprecated Use `voiceboxHealth()` instead (Phase 5). The old endpoint
+   * 308-redirects to `/api/voicebox/status`, so fetch follows it transparently
+   * and the legacy shape is still returned only because the backend no longer
+   * serves it directly — callers should migrate.
+   */
   voiceboxStatus: () => request<VoiceboxStatus>("/api/voices/voicebox/status"),
+
+  voiceboxHealth: () => request<VoiceboxHealth>("/api/voicebox/status"),
 
   createVoice: async (body: VoiceCreate, audio?: File | null) => {
     const fd = new FormData();

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from backend.config import get_settings
 from backend.schemas import (
@@ -24,10 +24,8 @@ from backend.schemas import (
     VoiceOut,
     VoicePoolCounts,
     VoiceUpdate,
-    VoiceboxStatusOut,
 )
 from backend.voices import library
-from backend.voices.voicebox_client import probe
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voices", tags=["voices"])
@@ -158,15 +156,14 @@ def pool_summary() -> VoicePoolCounts:
     return VoicePoolCounts(**counts)
 
 
-@router.get("/voicebox/status", response_model=VoiceboxStatusOut)
-async def voicebox_status() -> VoiceboxStatusOut:
-    status = await probe()
-    return VoiceboxStatusOut(
-        enabled=status.enabled,
-        reachable=status.reachable,
-        base_url=status.base_url,
-        note=status.note,
-    )
+@router.get("/voicebox/status", deprecated=True, include_in_schema=False)
+async def voicebox_status_legacy() -> RedirectResponse:
+    """Deprecated — redirects to the canonical /api/voicebox/status (Phase 5).
+
+    Kept for backwards compatibility with pre-Phase-5 clients; HTTP 308 so
+    the method and body are preserved if a future client sends one.
+    """
+    return RedirectResponse(url="/api/voicebox/status", status_code=308)
 
 
 @router.post("", response_model=VoiceOut, status_code=201)
