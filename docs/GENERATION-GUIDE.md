@@ -117,3 +117,75 @@ defined in `backend/api/generate.py`:
 | Play approved | `GET /api/segments/<id>/audio?kind=approved` | Streams the approved file.                 |
 
 Bulk endpoints accept a JSON body of `{segment_ids: [...]}`.
+
+## Windows dev aid: placeholder audio
+
+**This is a temporary dev-only tool.** It exists so Phase 6 player UI work
+(playback sync, scrubber, chapter progression, timing) can be exercised on
+Windows where Voicebox is not available. Do **not** add it to production setup
+docs, and do **not** rely on its output for listening — every segment is silent.
+
+### Purpose
+
+`scripts/generate_placeholder_audio.py` walks every segment in a project (or a
+single chapter) and writes a silent PCM-16 mono WAV whose duration is the
+estimated per-segment length (`word_count / voicebox_default_wps`, clamped to
+1-30 s). It then updates each segment row exactly like the real generation
+pipeline does — `audio_path`, `duration_ms`, `status='generated'`,
+`approved_at` left NULL — so the player, assembler, approval toolbar, and all
+Phase 5/6 UI can reach their post-generation code paths.
+
+Files land in the same directory the real generator uses:
+
+    data/projects/<project_id>/audio/raw/<chapter_id>/segment_<segment_id>.wav
+
+That means when Voicebox comes online on the Mac and real generation runs,
+`regenerate` / `generate (N)` will simply overwrite these WAVs — no cleanup
+required.
+
+### Prerequisites
+
+- `ffmpeg` on `PATH` (`winget install ffmpeg`, `scoop install ffmpeg`, or
+  `brew install ffmpeg`). The script exits 2 with install hints if missing.
+- The project venv activated so `backend.*` imports resolve.
+
+### Usage
+
+```bash
+# Dry-run — lists every segment, writes nothing, no DB changes.
+python scripts/generate_placeholder_audio.py --project agot-chapter-1-real-test --dry-run
+
+# Generate placeholders for every chapter in a project.
+python scripts/generate_placeholder_audio.py --project agot-chapter-1-real-test
+
+# Scope to a single chapter (by id or by exact title, case-insensitive).
+python scripts/generate_placeholder_audio.py --project agot-chapter-1-real-test --chapter BRAN
+
+# Force overwrite of existing files (default is skip).
+python scripts/generate_placeholder_audio.py --project agot-chapter-1-real-test --force
+
+# Override the words-per-second factor (default comes from settings).
+python scripts/generate_placeholder_audio.py --project agot-chapter-1-real-test --wps 2.0
+```
+
+`--project` accepts either a project UUID or its slug. `--chapter` accepts
+either a chapter UUID or its exact title (ambiguous titles exit 2 with the
+conflicting rows listed so you can pick by id).
+
+### What it writes
+
+- **File**: silent WAV at `data/projects/<id>/audio/raw/<chapter_id>/segment_<seg_id>.wav`,
+  sized to the estimated duration.
+- **DB**: `UPDATE segments SET audio_path=<relative>, duration_ms=<int>,
+  status='generated', updated_at=now`. `approved_at` stays NULL — the real
+  generation path is the only thing that should flip segments to `approved`.
+- **Cache**: calls `invalidate_chapter_cache(chapter_id)` after each chapter
+  so any stale `chapter_assemblies` row is dropped.
+
+### What it does **not** do
+
+- Does not touch `approved/` files.
+- Does not change project or chapter status.
+- Does not flip `segments.text_modified`.
+- Does not attempt to mimic Voicebox audio quality — silence only.
+
