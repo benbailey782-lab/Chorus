@@ -26,6 +26,12 @@ class Settings(BaseSettings):
 
     max_voice_sample_mb: int = 25
 
+    # Phase 3 — file-drop LLM integration (§12A).
+    # Hard-cap on book-text substituted into extract_cast.md before truncation
+    # kicks in; truncation surfaces as a warning in the extract-cast API
+    # response and in the UI confirmation modal.
+    extract_cast_char_limit: int = 300_000
+
     @property
     def data_path(self) -> Path:
         return Path(self.data_dir).resolve()
@@ -46,11 +52,30 @@ class Settings(BaseSettings):
     def max_voice_sample_bytes(self) -> int:
         return self.max_voice_sample_mb * 1024 * 1024
 
+    @property
+    def llm_queue_path(self) -> Path:
+        return self.data_path / "llm_queue"
+
+    @property
+    def llm_queue_pending_path(self) -> Path:
+        return self.llm_queue_path / "pending"
+
+    @property
+    def llm_queue_responses_path(self) -> Path:
+        return self.llm_queue_path / "responses"
+
+    @property
+    def llm_queue_completed_path(self) -> Path:
+        return self.llm_queue_path / "completed"
+
     def ensure_dirs(self) -> None:
         self.data_path.mkdir(parents=True, exist_ok=True)
         self.projects_path.mkdir(parents=True, exist_ok=True)
         self.voice_library_path.mkdir(parents=True, exist_ok=True)
         self.voice_samples_path.mkdir(parents=True, exist_ok=True)
+        self.llm_queue_pending_path.mkdir(parents=True, exist_ok=True)
+        self.llm_queue_responses_path.mkdir(parents=True, exist_ok=True)
+        self.llm_queue_completed_path.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache
