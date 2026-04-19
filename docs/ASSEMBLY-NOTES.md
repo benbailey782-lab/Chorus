@@ -15,8 +15,11 @@ If ffmpeg is not installed, `assemble_chapter` raises `FfmpegMissingError` and t
 
 - **Symptom:** assembly jobs fail with `NotImplementedError` from `base_events._make_subprocess_transport`.
 - **Cause:** Python's default `SelectorEventLoop` on Windows does not support `asyncio.create_subprocess_exec` (used to invoke ffmpeg/ffprobe).
-- **Fix:** `backend/main.py` sets `asyncio.WindowsProactorEventLoopPolicy()` at module import, guarded by `sys.platform == "win32"`. This runs before the FastAPI app and the background worker start.
-- **Operator action:** none — handled automatically. Non-Windows platforms are unaffected (the policy swap is skipped).
+- **Fix:** use `scripts/serve.py` as the entry point. It sets `asyncio.WindowsProactorEventLoopPolicy()` **before** `import uvicorn` and passes `loop="asyncio"` to `uvicorn.run()`. `scripts/run.bat` and `scripts/run.sh` both invoke it.
+- **Do NOT run `uvicorn backend.main:app --reload` directly on Windows.** Uvicorn creates the event loop before `backend.main` imports, so the policy switch inside that module arrives too late. The error reappears even with the module-level guard.
+- `backend/main.py` keeps a defensive policy switch too, which is a safety net for non-Windows platforms and any future consumer that imports `backend.main` before the loop starts. Harmless when redundant.
+- **Mac/Linux:** no asyncio limitation — `SelectorEventLoop` supports subprocess on those platforms. `scripts/serve.py` still works identically; the policy swap is a no-op there.
+- **Operator action:** use `scripts/run.bat` (Windows) or `scripts/run.sh` (Mac/Linux) as documented in the README. No manual configuration required.
 
 ## Pipeline
 

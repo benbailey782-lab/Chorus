@@ -6,6 +6,14 @@ from contextlib import asynccontextmanager
 # Windows uses SelectorEventLoop by default, which does NOT support
 # asyncio.create_subprocess_exec (used by the ffmpeg-based chapter assembly).
 # Switch to ProactorEventLoop before any async subprocess code runs.
+#
+# NOTE: when uvicorn is launched directly (e.g. `uvicorn backend.main:app --reload`)
+# on Windows, uvicorn has already created the event loop by the time this module
+# is imported — so this policy switch arrives too late. The canonical entry point
+# is `scripts/serve.py`, which sets the policy BEFORE importing uvicorn and
+# passes `loop="asyncio"` explicitly. This block stays here as a safety net for
+# non-Windows platforms and for any future consumer that imports backend.main
+# before starting an event loop.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -51,6 +59,8 @@ log = logging.getLogger("chorus")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    running_loop = asyncio.get_running_loop()
+    log.info("event loop at startup: %s", type(running_loop).__name__)
     init_db()
     try:
         mdns.advertise(settings.mdns_name, settings.port)

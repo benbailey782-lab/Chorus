@@ -16,7 +16,7 @@ if not exist frontend\node_modules (
 )
 
 start "chorus-frontend" cmd /c "cd frontend && npm run dev -- --host 0.0.0.0"
-start "chorus-backend" cmd /c "uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload"
+start "chorus-backend" cmd /c "python scripts\serve.py"
 
 timeout /t 3 >nul
 start "" http://localhost:5173
