@@ -159,3 +159,78 @@ class VoiceboxStatusOut(BaseModel):
     reachable: Optional[bool] = None  # null when disabled
     base_url: str
     note: str
+
+
+# --- Characters (§9.3) ------------------------------------------------------
+
+EstimatedLineCount = Literal["main", "supporting", "minor", "background"]
+
+
+class CharacterOut(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    gender: Optional[Gender] = None
+    age_estimate: Optional[AgeRange] = None
+    description: Optional[str] = None
+    speaking_style: Optional[str] = None
+    character_archetype: Optional[str] = None
+    first_appearance_chapter: Optional[int] = None
+    estimated_line_count: Optional[EstimatedLineCount] = None
+    line_count: Optional[int] = None
+    is_narrator: bool = False
+    voice_id: Optional[str] = None
+    engine_override: Optional[EnginePreference] = None
+    notes: Optional[str] = None
+
+
+class CharacterUpdate(BaseModel):
+    """PATCH /api/characters/{id}. Manual-override surface for the casting gate."""
+    voice_id: Optional[str] = None
+    engine_override: Optional[EnginePreference] = None
+    notes: Optional[str] = None
+    # Name-level edits live behind a separate flow; keeping PATCH focused on
+    # casting overrides avoids silent breakage of Phase-4 attribution once it
+    # wires up.
+
+
+# --- Jobs (§9.8) ------------------------------------------------------------
+
+JobStatusValue = Literal[
+    "queued", "running", "awaiting_response", "complete", "failed"
+]
+
+
+class JobOut(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    kind: str  # Chorus-internal name; spec §9.8 calls it "type"
+    status: JobStatusValue
+    progress: float = 0.0
+    message: Optional[str] = None
+    payload: Optional[dict] = None
+    result: Optional[dict] = None
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+# --- Extract / Auto-cast trigger responses ---------------------------------
+
+
+class ExtractCastResponse(BaseModel):
+    job_id: str
+    request_path: str
+    book_text_chars: int
+    truncated: bool
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AutoCastResponse(BaseModel):
+    job_id: str
+    request_path: str
+    cast_size: int
+    voice_library_size: int

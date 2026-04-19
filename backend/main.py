@@ -5,9 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import mdns
-from backend.api import health, projects, voices
+from backend.api import characters, health, jobs as jobs_api, projects, voices
 from backend.config import get_settings
 from backend.db import init_db
+from backend.jobs import worker as job_worker
+# Import handlers so their @register_handler decorators fire before the worker starts.
+from backend.nlp import auto_cast as _auto_cast  # noqa: F401
+from backend.nlp import extract_characters as _extract_characters  # noqa: F401
+from backend.nlp import file_drop
 from backend.voices.voicebox_client import probe as probe_voicebox
 
 APP_VERSION = "0.1.0"
@@ -46,10 +51,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001 — preflight must never crash startup
         log.warning("Voicebox preflight raised unexpectedly: %s", e)
 
+    # File-drop LLM queue preflight (§12A). Surfaces current queue state so
+    # the operator knows whether there's work already sitting around.
+    try:
+        queue_state = await file_drop.scan_queue()
+        log.info(
+            "File-drop queue at %s (pending=%d, responses=%d, completed=%d). Handlers: %s",
+            settings.llm_queue_path,
+            len(queue_state["pending"]),
+            len(queue_state["responses"]),
+            len(queue_state["completed"]),
+            ", ".join(job_worker.registered_kinds()) or "(none)",
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("File-drop queue preflight failed: %s", e)
+
+    # Start the response worker. It runs until shutdown.
+    worker_handle = job_worker.start()
+
     log.info("Chorus backend ready on %s:%d", settings.host, settings.port)
     try:
         yield
     finally:
+        await worker_handle.stop()
         mdns.stop()
 
 
@@ -66,3 +90,5 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(projects.router)
 app.include_router(voices.router)
+app.include_router(characters.router)
+app.include_router(jobs_api.router)
