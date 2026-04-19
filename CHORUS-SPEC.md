@@ -107,7 +107,7 @@ Chorus runs on the Mac because Voicebox runs on the Mac. The phone accesses it v
 │   chorus.local:    │  WiFi   │   :8765            │
 │   8765             │  LAN    │                    │
 │                    │         │   Voicebox         │
-│                    │         │   :5173            │
+│                    │         │   :8090            │
 └────────────────────┘         └────────────────────┘
 ```
 
@@ -464,7 +464,7 @@ See §7.2 schema; stored in SQL with JSON columns for arrays.
 | project_id | TEXT | FK |
 | word | TEXT | |
 | phonetic | TEXT | Respelling applied via text substitution |
-| applies_to_character_id | TEXT | Nullable; scope |
+| applies_to_character_id | TEXT | Nullable; scope. **Per-character scoping deferred to Phase 7** — the column is reserved but unused in v1. Phase 5 ships global + project scopes only (project overrides global). See `docs/PRONUNCIATION-GUIDE.md`. |
 
 ### 9.7 `playback_state`
 | Column | Type | Notes |
@@ -546,7 +546,7 @@ Ambient is on by default but trivially disabled per project. Some listeners hate
 
 ### 12.1 Assumptions
 - Voicebox runs separately on the same Mac
-- Default URL `http://localhost:5173` (configurable)
+- Default URL `http://localhost:8090` (configurable via `VOICEBOX_BASE_URL`). The default port is `8090` rather than Voicebox's upstream `5173` to avoid collisions with Vite (`5173`) and the Chorus backend (`8765`) when all three run on one Mac. Users running Voicebox at its upstream default should set `VOICEBOX_BASE_URL=http://localhost:5173`.
 - Pre-flight check on Chorus startup: confirm Voicebox is reachable
 - Display clear error if not: "Chorus requires Voicebox running locally. Install from https://github.com/jamiepine/voicebox"
 
@@ -657,6 +657,26 @@ Before any LLM-driven pass, Chorus shows:
 
 ### 13.4 Claude Code Dev Mode
 For development iteration, Chorus supports a "Claude Code" mode where NLP passes are stubbed out and the user pastes in Claude Code outputs manually. This lets Ben iterate without burning API credits during initial development.
+
+---
+
+## 13A. Audio File Layout (Assembly Inputs)
+
+Per-segment TTS output lives under the project's data directory in two parallel
+trees:
+
+- `data/projects/<project_id>/audio/raw/<chapter_id>/segment_<segment_id>.<ext>` — canonical raw output. Every successful generation writes here.
+- `data/projects/<project_id>/audio/approved/<chapter_id>/segment_<segment_id>.<ext>` — the operator-approved subset used by assembly. Populated by the Approve action (copies raw → approved; raw is preserved so Reject/Regenerate can fall back without re-running TTS).
+
+Phase 8 (assembly) prefers `approved/` and falls back to `raw/` **only when
+explicitly configured**. Default behavior is "approved or nothing" so
+unreviewed segments don't sneak into the final mix.
+
+`<ext>` is sniffed from Voicebox's `Content-Type` response header
+(`audio/wav` → `.wav`, `audio/mpeg` → `.mp3`, `audio/flac` → `.flac`,
+`audio/ogg` → `.ogg`). Unknown Content-Types fall back to `.wav` with a
+warning log. See `docs/GENERATION-GUIDE.md` for operator-level detail and
+`backend/audio/paths.py` for the path helper.
 
 ---
 
@@ -887,7 +907,7 @@ Each phase has a hard exit criterion. Do not advance until it's met.
 - Parallel worker pool with ETA estimator
 - SSE progress events
 
-**Exit:** Generate audio for one full AGoT chapter with full theatrical treatment.
+**Exit:** Generate audio for one full AGoT chapter with full theatrical treatment. **Status: met for Windows dev** — UI is operable end-to-end; the generation path is fully built and disabled behind the `VOICEBOX_ENABLED` flag. Mac + live Voicebox validation (the "real" exit) is pending the first Mac run — the flip is env-only, no code changes. See `docs/GENERATION-GUIDE.md` and `docs/VOICEBOX-WIRING.md`.
 
 ### Phase 6 — Assembly + Ambient + Player (Days 14–16)
 - FFmpeg assembly pipeline

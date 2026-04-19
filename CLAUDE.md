@@ -16,6 +16,7 @@
 - Phase 2 (Voice Library) — **done in Voicebox-stub mode** (dev is on Windows, no Voicebox installed). Full CRUD + metadata + optional reference-audio upload + mobile-first dark UI at §15.8 tokens. Voicebox wiring punch-list: `docs/VOICEBOX-WIRING.md`.
 - Phase 3 (Cast Extraction + Auto-Casting) — **done via file-drop LLM integration (§12A)**. No Anthropic SDK calls; prompts written to `data/llm_queue/pending/`, responses read from `data/llm_queue/responses/`. Jobs worker reconciles them. Operator playbook: `docs/FILE-DROP-WORKFLOW.md`.
 - Phase 4 (Per-Chapter Attribution) — **shipped**. Backend: schema v5 (adds `segments.text_modified`), `attribute_chapter` handler, `POST /api/chapters/{id}/attribute`, `POST /api/projects/{id}/attribute-all`, `GET /api/chapters/{id}/segments`, `PATCH /api/segments/{id}` (flips `text_modified=1` on text edits), `POST /api/segments/bulk-reassign`, `GET /api/segments/{id}/preview` → 501 until Voicebox. Full review UI at `/project/:idOrSlug/chapters/:chapterId`: prose view + table view, filter drawer (speaker, confidence range, render mode, emotion/notes toggles, persisted per-chapter), detail panel with inline editing + Cmd/Ctrl+Enter save, bulk operations (reassign speaker, set render mode, add/remove emotion tags, select-all), keyboard nav (j/k, Enter, Esc, ?). Casting page gains a Chapters section with progress bar, per-chapter status chips, inline Attribute/Review/Retry, and an "Attribute all" project-level action. Round-trip validated against AGoT BRAN via file-drop: 217 segments, mean confidence 96.9, project → `attributed`.
+- Phase 5 (TTS Generation + Pronunciation Overrides) — **shipped backend + UI; live validation pending Mac + Voicebox**. Backend: schema v6 (adds `segments.approved_at`, `segments.status CHECK`, `pronunciations_global`, `projects.generation_config_json`); typed Voicebox httpx client with `synthesize()` thin wrapper; `GET /api/voicebox/status` canonical (old path 308 redirect); pronunciation system (global + project-scoped tables, Pass 3 file-drop handler, 11 REST endpoints, project-overrides-global merge); generation pipeline (`backend/audio/generation.py`, direct-mode job handler, 9 REST endpoints, path layout `data/projects/<id>/audio/{raw,approved}/<chapter_id>/segment_<id>.<ext>` with Content-Type sniffing). Frontend: Pronunciations pages (project + global), Chapter Review Generate button + estimate modal + progress bar + per-segment audio icons + DetailPanel Audio section (Play/Regenerate/Approve/Reject), bulk audio actions. All TTS call paths gracefully degrade when `VOICEBOX_ENABLED=false`: jobs fail with clear errors, UI surfaces disabled state + "Voicebox disabled" chip. Flipping the flag on a Mac with live Voicebox enables generation without code changes.
 - Later phases per spec §17.
 
 ## Conventions
@@ -99,6 +100,23 @@ Run attribution pass on AGoT book 1 chapter-by-chapter via file-drop; manually i
   - `attributing` → `attributed` when every chapter has at least one segment AND `chapter_count > 0`
 - **`line_count` on characters** is recomputed after every successful attribute_chapter ingestion. The formula is "count of dialogue-mode segments assigned to this character across the whole project."
 - **`text_modified` column** on segments. Flipped to `1` by `PATCH /api/segments/{id}` when the request body contains `text` and the new value differs from the stored value. Re-attribution of a chapter currently wipes all segments including user edits — smarter merge deferred to Phase 7.
+
+### Phase-5 backend conventions
+
+- **`jobs.kind = "generate_segment"`** — direct handler (not file-drop). Registered via `@register_handler("generate_segment", mode="direct")`. Payload: `{segment_id, force?}`. Worker dispatches queued direct jobs via a parallel loop (see `backend/jobs/worker.py`).
+- **`jobs.kind = "pronounce_unusual"`** — file-drop handler. Payload: `{project_id}`. Response maps `word`→`term` and `respelling`→`phonetic` when inserting.
+- **Voicebox integration**: all calls go through `backend/voices/voicebox_client.py`. `VoiceboxNotEnabled` when flag off; `VoiceboxUnreachableError` on network failure; generic `VoiceboxError` superclass. Endpoint assumptions are spec-derived — see `docs/VOICEBOX-WIRING.md` for the verification punchlist.
+- **Audio layout**: `data/projects/<project_id>/audio/raw/<chapter_id>/segment_<segment_id>.<ext>` and `/approved/` equivalent. Approve copies raw→approved (preserves source); Reject clears `approved_at` only (file stays). Regenerate wipes raw + approved files for that segment before re-generating.
+- **Pronunciation merge**: `backend/nlp/merge_pronunciations.py` → project entries override global by lowercase term. Longest-term-first regex substitution (`Lord Varys` wins over `Varys`). Pure lowercase swap (phonetic is canonical).
+- **Generation concurrency**: `asyncio.Semaphore(settings.voicebox_max_concurrent_generations)` (default 1 — serial). Forward-compat; bump when Voicebox proves stable on Mac.
+- **Voicebox port**: default `8090` (avoids Vite 5173 + Chorus backend 8765 collisions). Override via `VOICEBOX_BASE_URL`.
+
+### Phase-5 frontend conventions
+
+- **Pronunciation manager** is a single shared component (`frontend/src/components/pronunciations/PronunciationManager.tsx`) parameterized by `scope: "global"|"project"`. Mounted by both `/settings/pronunciations` and `/project/:idOrSlug/pronunciations`.
+- **Audio state** helper at `frontend/src/components/review/segment-audio.tsx` is the single source of truth: `getSegmentAudioState(seg)` returns `"none"|"generating"|"generated"|"approved"|"error"`. Never hardcode state logic elsewhere.
+- **Voicebox health** is queried via `useQuery(["voicebox-health"], api.voiceboxHealth, { staleTime: 30_000 })` — reused across Chapter Review + Voice Library + any future TTS surface. Don't duplicate the query.
+- **Generate button UX**: disabled when estimate says 0 ungenerated segments; `btn-surface` style when Voicebox not reachable (still clickable to open the modal and explain why); `btn-primary` only when Voicebox is fully ready.
 
 ### Phase-4 frontend conventions
 

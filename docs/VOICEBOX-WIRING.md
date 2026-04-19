@@ -1,162 +1,181 @@
-# Voicebox Wiring Checklist
+# Voicebox Wiring Punchlist
 
-Phase 2 of Chorus was built on Windows, where Voicebox isn't installed. Every
-TTS call-site is stubbed — `VoiceboxClient` raises `VoiceboxNotEnabled` when
-`VOICEBOX_ENABLED=false`. This doc is the punch-list for future you (or anyone)
-who wires it up.
+Chorus is developed on Windows, where Voicebox isn't installed. Every TTS call
+goes through `backend/voices/voicebox_client.py`, which short-circuits with
+`VoiceboxNotEnabled` whenever `VOICEBOX_ENABLED=false` (the default). The
+production target is a Mac running Voicebox alongside Chorus. This doc is the
+checklist of verification work the first time real Voicebox is online.
 
-Before writing any client code: **run Voicebox, hit `/docs`, and verify each
-endpoint's actual request/response shape matches what's assumed below.**
-§12.2 of `CHORUS-SPEC.md` explicitly flags these endpoints as tentative.
+## Status as of Phase 5
+
+- Schema (v6): `segments.status` CHECK constraint covers
+  `pending|generating|generated|approved|error`; `segments.approved_at`
+  populated on approve; `projects.generation_config_json` carries per-project
+  overrides (reserved; not yet authored by the UI).
+- Typed HTTP client (`backend/voices/voicebox_client.py`) with async `httpx`
+  session, typed dataclasses, structured exceptions, retry-on-transient policy.
+- Thin-wrapper `synthesize()` — the canonical "give me audio for this text"
+  entrypoint. Internally: `generate()` → poll `get_generation()` until
+  `status in {"done","error"}` → `download_generation_audio()` → return
+  `(bytes, content_type)`.
+- Canonical health endpoint: `GET /api/voicebox/status`. Legacy path
+  `GET /api/voices/voicebox/status` returns HTTP 308 Permanent Redirect to the
+  canonical path and is kept only so old clients don't 404 during rollout.
 
 ## Config surface
 
-`.env`:
+Defaults live in `backend/config.py` (`Settings` via pydantic-settings):
 
-```
-VOICEBOX_BASE_URL=http://localhost:5173    # Voicebox dev default
+| Setting                              | Default                    | Env var                                 |
+|---|---|---|
+| `voicebox_enabled`                   | `False`                    | `VOICEBOX_ENABLED`                      |
+| `voicebox_base_url`                  | `http://localhost:8090`    | `VOICEBOX_BASE_URL`                     |
+| `voicebox_timeout_seconds`           | `120`                      | `VOICEBOX_TIMEOUT_SECONDS`              |
+| `voicebox_default_wps`               | `2.5`                      | `VOICEBOX_DEFAULT_WPS`                  |
+| `voicebox_output_sample_rate`        | `44100`                    | `VOICEBOX_OUTPUT_SAMPLE_RATE`           |
+| `voicebox_max_concurrent_generations`| `1`                        | `VOICEBOX_MAX_CONCURRENT_GENERATIONS`   |
+
+**Port note.** Default port moved from `5173` (Voicebox upstream default) to
+`8090` to avoid collision with Vite (`5173`) and the Chorus backend (`8765`)
+when all three run on the same Mac. If you run Voicebox on its upstream default,
+set `VOICEBOX_BASE_URL=http://localhost:5173`.
+
+**Concurrency note.** `max_concurrent_generations` defaults to `1` (serial).
+Generation is gated by `asyncio.Semaphore(N)` in
+`backend/audio/generation.py`. Forward-compatible; bump after Mac/Voicebox soak.
+
+## Flipping the flag
+
+```bash
+# .env in the repo root (not committed)
 VOICEBOX_ENABLED=true
+VOICEBOX_BASE_URL=http://localhost:8090
 ```
 
-When `VOICEBOX_ENABLED=true` but the server is down, startup still succeeds —
-the preflight logs a warning and `/api/voices/voicebox/status` reports
-`{enabled: true, reachable: false}`. The UI surfaces this via
-`VoiceboxStatusBanner.tsx`.
+Restart the backend. Verify:
 
-## Wiring checklist
+```bash
+curl http://localhost:8765/api/voicebox/status
+# → {"enabled": true, "reachable": true, "base_url": "http://localhost:8090", ...}
+```
 
-All stubs live in `backend/voices/voicebox_client.py`. Each method has a
-`TODO(voicebox)` comment in the source with the endpoint and expected shapes
-duplicated; this table is the same info in checklist form.
+When `enabled: true` but `reachable: false`, startup still succeeds. The UI
+surfaces the state via the `voicebox-health` query used by Chapter Review, the
+Voice Library, and any future TTS surface.
 
-### 1. Probe (already live)
+## Exception hierarchy
 
-- **Method**: `backend/voices/voicebox_client.py:probe()`
-- **Endpoint**: `GET {VOICEBOX_BASE_URL}/`
-- **Purpose**: Lightweight reachability check. Returns `VoiceboxStatus`; never raises.
-- **Wiring status**: **LIVE**. If Voicebox's root path is not reachable by GET,
-  swap this to their real health endpoint (`/api/health` if one exists).
+All defined in `backend/voices/voicebox_client.py`:
 
-### 2. `list_profiles`
+- `VoiceboxError(RuntimeError)` — base class; catch this to handle any
+  Voicebox-originated failure.
+  - `VoiceboxNotEnabled` — `settings.voicebox_enabled is False`. Caller should
+    degrade gracefully (skip, show disabled state, etc.).
+  - `VoiceboxUnreachableError` — **canonical** network / HTTP error (connection
+    refused, non-2xx after retries, DNS failure). All new code should catch
+    this.
+  - `VoiceboxUnreachable` — legacy alias; kept as a subclass of
+    `VoiceboxError` for import compatibility. Delete when no old call sites
+    remain.
+  - `VoiceboxTimeoutError` — `synthesize()` exceeded
+    `voicebox_timeout_seconds` while polling.
+  - `VoiceboxGenerationFailed` — Voicebox returned `status == "error"` in the
+    generation body (distinct from transport failures).
 
-- **Method**: `backend/voices/voicebox_client.py:VoiceboxClient.list_profiles`
-- **Endpoint**: `GET /api/profiles`
-- **Request**: no body.
-- **Expected response**: JSON array of profile objects. Per-profile shape:
-  ```json
-  {
-    "id": "vb_abc123",
-    "display_name": "Grizzled Northern Lord",
-    "engine": "chatterbox_turbo",
-    "created_at": "2026-04-17T20:15:00Z",
-    "sample_url": "https://.../sample.wav"   // nullable
-  }
-  ```
-- **Used by**: not wired into any Chorus flow yet. Exists for debugging and a
-  future admin "reconcile with Voicebox" view.
+## Endpoint assumption punchlist — `TODO(voicebox-verify)`
 
-### 3. `create_profile` — **MAIN WIRING POINT**
+Every row below is a **design-time assumption** derived from §12.2 of
+`CHORUS-SPEC.md`. Before running live, open Voicebox's `/docs` (FastAPI /
+OpenAPI UI at `{base_url}/docs`) and walk the list. Update the real shape in
+this doc first, then in the client.
 
-- **Method**: `backend/voices/voicebox_client.py:VoiceboxClient.create_profile`
-- **Endpoint**: `POST /api/profiles` (multipart/form-data)
-- **Request fields**:
-  - `audio` — file part; WAV/MP3/FLAC/M4A/OGG; ≤ 25 MB.
-  - `display_name` — string.
-  - `metadata` — optional JSON string; we pass the §7.2 metadata dict so
-    Voicebox can attach engine preferences to the clone.
-- **Expected response**:
-  ```json
-  {
-    "id": "vb_xyz456",          // <-- persist this on voices.voicebox_profile_id
-    "display_name": "Grizzled Northern Lord",
-    "engine": "chatterbox_turbo",
-    "sample_url": "https://.../sample.wav",
-    "created_at": "2026-04-17T20:15:00Z"
-  }
-  ```
-- **Callers to wire**: two `TODO(voicebox)` comments in `backend/api/voices.py`:
-  1. `POST /api/voices` — if audio was included in the multipart, call
-     `create_profile` after the DB insert and `update_voice(id,
-     {"voicebox_profile_id": profile["id"]})`.
-  2. `POST /api/voices/{id}/sample` — when the reference audio is replaced on
-     an existing voice, call `create_profile` again and overwrite
-     `voicebox_profile_id`.
+### 1. Health probe `GET /` — `TODO(voicebox-verify)`
 
-  Both call-sites already handle audio persistence; the wiring is "after the
-  audio is on disk, call Voicebox with that path."
+| | |
+|---|---|
+| Purpose | Reachability check; never raises. Returns `VoiceboxStatus`. |
+| Assumed request | No body. Any 2xx counts as reachable. |
+| Assumed response | Anything. We only read status code + optional `version` JSON field. |
+| Verify | `curl {base_url}/` — confirm it 200s. If Voicebox only exposes `/api/health`, swap the probe path. |
 
-### 4. `generate`
+### 2. `GET /api/profiles` — `TODO(voicebox-verify)`
 
-- **Method**: `backend/voices/voicebox_client.py:VoiceboxClient.generate`
-- **Endpoint**: `POST /api/generate`
-- **Request body (JSON)**:
-  ```json
-  {
-    "text": "Winter is coming.",
-    "profile_id": "vb_xyz456",
-    "engine": "chatterbox_turbo",    // optional; null = use profile default
-    "effects": {                      // optional; render-mode-derived
-      "reverb": 0.15,
-      "pre_silence_ms": 500,
-      "post_silence_ms": 1000,
-      "paper_filter": true
-    }
-  }
-  ```
-- **Expected response**:
-  ```json
-  {
-    "generation_id": "gen_789",
-    "status": "queued" | "running" | "done" | "error",
-    "progress": 0.0,
-    "audio_url": null            // populated once status == "done"
-  }
-  ```
-- **Callers to wire (Phase 5+)**:
-  - Per-segment audio rendering in `backend/audio/renderer.py` (doesn't exist yet).
-  - Voice-preview endpoint in voices API (`POST /api/voices/{id}/preview`
-    taking `sample_text` and returning a short clip). Not yet implemented —
-    current "preview" streams the reference audio instead.
+| | |
+|---|---|
+| Purpose | List all Voicebox profiles. Not yet wired into Chorus flows — exists for a future "reconcile" admin view. |
+| Assumed request | No body. |
+| Assumed response | JSON array: `[{id, display_name, engine, created_at, sample_url}]`. |
+| Verify | Hit `/docs`, compare against the "List Profiles" schema. Field names most likely to drift: `display_name` (could be `name`), `sample_url` (could be `preview_url`). |
 
-### 5. `get_generation`
+### 3. `POST /api/profiles` — `TODO(voicebox-verify)`
 
-- **Method**: `backend/voices/voicebox_client.py:VoiceboxClient.get_generation`
-- **Endpoint**: `GET /api/generations/{generation_id}`
-- **Request**: no body.
-- **Expected response**: same shape as `generate`'s response plus a possible
-  `error` field when `status == "error"`.
-- **Callers to wire (Phase 5)**: polling loop in `backend/jobs/queue.py`.
+| | |
+|---|---|
+| Purpose | Clone a voice from reference audio. Called when a Chorus voice with a reference audio file is created or has its audio replaced. |
+| Assumed request | `multipart/form-data` with `audio` (WAV/MP3/FLAC/M4A/OGG, ≤25 MB), `display_name` (string), `metadata` (JSON string). |
+| Assumed response | `{id, display_name, engine, sample_url, created_at}`. Chorus persists `id` onto `voices.voicebox_profile_id`. |
+| Verify | `/docs` — confirm multipart fields names, max size, response `id` key. |
 
-### 6. `download_generation_audio`
+### 4. `POST /api/generate` — `TODO(voicebox-verify)`
 
-- **Method**: `backend/voices/voicebox_client.py:VoiceboxClient.download_generation_audio`
-- **Endpoint**: `GET /api/generations/{generation_id}/audio`
-- **Request**: no body.
-- **Expected response**: binary audio (Content-Type: `audio/wav` or
-  `audio/mpeg` — inspect the response header). Chorus writes this to
-  `data/projects/<slug>/segments/<segment_id>.<ext>`.
-- **Callers to wire (Phase 5)**: `backend/audio/renderer.py`.
+| | |
+|---|---|
+| Purpose | Kick off a generation. Called by `synthesize()` before polling. |
+| Assumed request (JSON) | `{text, profile_id, engine?, effects?}` where `effects` is `{reverb, pre_silence_ms, post_silence_ms, paper_filter}`. |
+| Assumed response | `{generation_id, status, progress, audio_url?}` — `status ∈ {"queued","running","done","error"}`. |
+| Verify | `/docs`. Effect key names likely to drift (Voicebox may call it `fx` or flatten into top-level fields). |
 
-## Verification on first real wire-up
+### 5. `GET /api/generations/{id}` — `TODO(voicebox-verify)`
 
-1. Set `VOICEBOX_ENABLED=true` and point `VOICEBOX_BASE_URL` at the running
-   Voicebox dev server.
-2. `curl http://localhost:8765/api/voices/voicebox/status` → expect
-   `reachable: true`.
-3. Create a new voice via the UI with a reference audio file. Confirm:
-   - `voices.voicebox_profile_id` is populated (check SQLite directly).
-   - Voicebox's own admin lists the new profile.
-4. If any field name or type above differs from reality, **update this doc
-   first** before changing the client — it stays the source of truth for
-   wiring expectations.
+| | |
+|---|---|
+| Purpose | Poll an in-flight generation. `synthesize()` loops on this until `status` is terminal. |
+| Assumed request | No body. |
+| Assumed response | Same shape as `/api/generate` response plus `error?` on failure. |
+| Verify | `/docs`. Also confirm the poll cadence Voicebox is happy with (we use 1s with jitter). |
 
-## If the endpoints differ from §12.2
+### 6. `GET /api/generations/{id}/audio` — `TODO(voicebox-verify)`
 
-Spec §12.2 is the design-time guess. If the real API uses different paths or
-bodies:
+| | |
+|---|---|
+| Purpose | Fetch the rendered audio binary. Called once `status == "done"`. |
+| Assumed request | No body. |
+| Assumed response | Binary; `Content-Type: audio/wav`, `audio/mpeg`, `audio/flac`, or `audio/ogg`. Chorus sniffs the header and picks the extension. Unknown → `.wav` with warning log. |
+| Verify | `/docs` + a real fetch with `curl -v` to see the exact `Content-Type` header. |
 
-1. Update `CHORUS-SPEC.md §12.2` with the verified shapes.
-2. Update the `TODO(voicebox)` comments in `voicebox_client.py`.
-3. Update this doc.
-4. Only then rewrite the client methods — the comments should stop being
-   "TODO" and become just docstrings.
+## `synthesize()` — the thin wrapper
+
+Signature (see `backend/voices/voicebox_client.py`):
+
+```python
+async def synthesize(req: VoiceboxSynthesisRequest) -> tuple[bytes, str]:
+    ...
+```
+
+Behavior:
+
+1. Raises `VoiceboxNotEnabled` if flag off.
+2. Calls `generate()` to get a `generation_id`.
+3. Polls `get_generation()` with bounded backoff until `status` is terminal or
+   `voicebox_timeout_seconds` elapses.
+4. On `status == "error"`, raises `VoiceboxGenerationFailed` with the
+   server-supplied `error` field.
+5. On `status == "done"`, calls `download_generation_audio()` and returns
+   `(bytes, content_type)`.
+
+All transport errors bubble up as `VoiceboxUnreachableError`.
+
+## Verification checklist on first Mac + Voicebox run
+
+1. Start Voicebox on the Mac. Confirm `{base_url}/docs` renders.
+2. Set `VOICEBOX_ENABLED=true`, restart Chorus backend.
+3. `curl http://localhost:8765/api/voicebox/status` → expect `reachable: true`.
+4. Walk the punchlist above. For each mismatch: update this doc first, then
+   update the typed client, then drop the `TODO(voicebox-verify)` marker.
+5. Create a voice with reference audio via the UI → confirm
+   `voices.voicebox_profile_id` is populated in SQLite.
+6. Generate a single segment via Chapter Review → confirm `data/projects/<id>/audio/raw/<chapter_id>/segment_<segment_id>.<ext>` appears on disk with a sensible extension.
+7. Approve the segment → confirm the file is copied under `audio/approved/`.
+
+Only after every `TODO(voicebox-verify)` has been resolved should §12.2 of
+`CHORUS-SPEC.md` be marked verified.
