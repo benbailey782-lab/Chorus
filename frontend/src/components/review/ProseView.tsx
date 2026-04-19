@@ -82,14 +82,24 @@ export default function ProseView({ segments, selectedId, onSelect }: Props) {
             {showSpeaker && (
               <div
                 className="mt-4 mb-1 text-[11px] uppercase tracking-wider text-muted
-                           font-mono"
+                           font-mono flex items-center gap-2"
               >
-                {speaker}
+                <span>{speaker}</span>
+                {seg.text_modified && (
+                  <span
+                    className="text-muted/80 normal-case"
+                    title="Text modified by operator"
+                    aria-label="Text modified by operator"
+                  >
+                    {"\u270E Edited"}
+                  </span>
+                )}
               </div>
             )}
             <div
               role="button"
               tabIndex={0}
+              aria-selected={selected}
               data-segment-id={seg.id}
               onClick={() => onSelect(seg.id)}
               onKeyDown={(e) => {

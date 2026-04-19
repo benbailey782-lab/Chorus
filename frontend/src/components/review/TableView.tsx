@@ -243,6 +243,15 @@ export default function TableView({
                   >
                     {speaker}
                   </span>
+                  {seg.text_modified && (
+                    <span
+                      className="ml-1 text-[10px] text-muted"
+                      title="Text modified by operator"
+                      aria-label="Text modified by operator"
+                    >
+                      {"\u270E"}
+                    </span>
+                  )}
                 </td>
                 <td className="px-2 py-1.5 align-top">
                   <span

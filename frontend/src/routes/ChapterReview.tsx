@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import DetailPanel from "../components/review/DetailPanel";
 import KeyboardHelp from "../components/review/KeyboardHelp";
 import ProseView from "../components/review/ProseView";
 import ReviewFilters from "../components/review/ReviewFilters";
@@ -28,6 +29,7 @@ const ACTIVE_STATUSES = new Set<Job["status"]>([
 
 export default function ChapterReview() {
   const { idOrSlug = "", chapterId = "" } = useParams();
+  const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [viewMode, setViewMode] = useState<ViewMode>(() => loadViewMode());
@@ -36,6 +38,17 @@ export default function ChapterReview() {
   const [filters, setFilters] = useState<ReviewFiltersState>(() =>
     loadFilters(chapterId),
   );
+  // Mobile bottom-sheet detection. `null` until mount so SSR/first paint
+  // matches whatever the responsive layout had — we only treat it as mobile
+  // once matchMedia confirms.
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
 
   // When the route-level chapterId changes (e.g., user navigates between
   // chapters without a full remount) re-load the stored filter set for that
@@ -106,6 +119,11 @@ export default function ChapterReview() {
   const visibleSegments = useMemo(
     () => applyFilters(allSegments, filters),
     [allSegments, filters],
+  );
+
+  const selectedSegment = useMemo(
+    () => allSegments.find((s) => s.id === selectedId) ?? null,
+    [allSegments, selectedId],
   );
 
   // The ReviewFilters speaker list expects SegmentCharacter-shaped rows. The
@@ -351,24 +369,50 @@ export default function ChapterReview() {
         </div>
 
         <aside className="hidden md:block">
-          <div className="card p-4 text-sm text-muted sticky top-24">
-            {selectedId ? (
-              <>
-                <div className="text-fg font-medium mb-1">Segment selected</div>
-                <p>
-                  The full detail panel (character reassignment, text edits,
-                  emotion tags, preview) lands in a later commit.
-                </p>
-                <p className="mt-2 text-[11px] text-muted font-mono break-all">
-                  id: {selectedId}
-                </p>
-              </>
-            ) : (
-              <p>Select a segment to view details.</p>
-            )}
+          <div className="card p-0 sticky top-24 max-h-[calc(100vh-8rem)] overflow-hidden flex flex-col">
+            <DetailPanel
+              segment={selectedSegment}
+              characters={filterCharacters}
+              onSaved={() =>
+                queryClient.invalidateQueries({
+                  queryKey: ["segments", chapterId],
+                })
+              }
+            />
           </div>
         </aside>
       </div>
+
+      {/* Mobile bottom sheet ------------------------------------------- */}
+      {isMobile && (
+        <div
+          aria-hidden={selectedSegment ? undefined : true}
+          className={`fixed inset-x-0 bottom-0 z-30 md:hidden transition-transform duration-200
+                      ${selectedSegment ? "translate-y-0" : "translate-y-full pointer-events-none"}`}
+          style={{ height: "70vh" }}
+        >
+          <div className="h-full bg-bg border-t border-border rounded-t-card shadow-xl flex flex-col">
+            <div className="flex justify-center py-2 shrink-0">
+              <span
+                aria-hidden="true"
+                className="block h-1 w-10 rounded-full bg-border"
+              />
+            </div>
+            <div className="flex-1 min-h-0">
+              <DetailPanel
+                segment={selectedSegment}
+                characters={filterCharacters}
+                onClose={() => setSelectedId(null)}
+                onSaved={() =>
+                  queryClient.invalidateQueries({
+                    queryKey: ["segments", chapterId],
+                  })
+                }
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       <StatusBar segments={visibleSegments} />
 
