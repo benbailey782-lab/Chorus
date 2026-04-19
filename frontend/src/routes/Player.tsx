@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import ChapterList from "../components/player/ChapterList";
 import CoverArt from "../components/player/CoverArt";
 import IncompleteChapterDialog from "../components/player/IncompleteChapterDialog";
+import MobilePlayerCard from "../components/player/MobilePlayerCard";
 import Scrubber from "../components/player/Scrubber";
 import SpeedControl from "../components/player/SpeedControl";
 import SyncedTextView from "../components/player/SyncedTextView";
@@ -417,21 +418,23 @@ function MobilePlayerLayout({
 
   const segmentTimings = usePlayerStore((s) => s.segmentTimings);
   const currentSegmentId = usePlayerStore((s) => s.currentSegmentId);
-  const currentSegmentIndex = usePlayerStore((s) => s.currentSegmentIndex);
+  const storeChapterId = usePlayerStore((s) => s.chapterId);
 
-  const preview = useMemo(() => {
-    if (!segmentTimings.length) return [];
-    const i = Math.max(0, currentSegmentIndex);
-    return [
-      segmentTimings[i - 1] ?? null,
-      segmentTimings[i] ?? null,
-      segmentTimings[i + 1] ?? null,
-    ];
-  }, [segmentTimings, currentSegmentIndex]);
+  // Build a lightweight chapter shape for the flip card header. Using the
+  // store's chapterId (not just number/title) keeps the card honest when the
+  // user advances chapters mid-session.
+  const cardChapter = useMemo(() => {
+    if (chapterNumber === undefined) return null;
+    return {
+      id: storeChapterId ?? "",
+      number: chapterNumber,
+      title: chapterTitle ?? null,
+    };
+  }, [storeChapterId, chapterNumber, chapterTitle]);
 
   return (
-    <div className="flex flex-col gap-4 pb-40">
-      <header className="flex items-center gap-3">
+    <div className="flex flex-col gap-3 pb-40">
+      <header className="flex items-center gap-3 h-12">
         <Link
           to="/player"
           className="text-sm text-muted hover:text-fg shrink-0"
@@ -439,11 +442,11 @@ function MobilePlayerLayout({
         >
           ←
         </Link>
-        <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-wider text-muted">
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] uppercase tracking-wider text-muted truncate">
             {projectTitle}
           </div>
-          <div className="text-sm truncate">
+          <div className="text-base truncate">
             {chapterNumber !== undefined && `Ch. ${chapterNumber}`}
             {chapterTitle && (
               <span className="text-muted"> · {chapterTitle}</span>
@@ -452,51 +455,32 @@ function MobilePlayerLayout({
         </div>
       </header>
 
-      <CoverArt
-        title={projectTitle}
-        chapterTitle={chapterTitle}
-        chapterNumber={chapterNumber}
-        ratio="square"
-      />
+      {/* Flip card: tap to toggle cover <-> transcript. */}
+      <div className="w-full max-h-[55vh] aspect-square mx-auto my-1">
+        <MobilePlayerCard
+          chapter={cardChapter}
+          segmentTimings={segmentTimings}
+          currentSegmentId={currentSegmentId}
+          onSegmentSeek={(ms) => playerController.seek(ms)}
+          projectTitle={projectTitle}
+        />
+      </div>
+
+      <div className="flex justify-center">
+        <button
+          type="button"
+          onClick={() => setTranscriptOpen(true)}
+          className="text-xs text-muted hover:text-fg underline underline-offset-2"
+        >
+          View full transcript
+        </button>
+      </div>
 
       <AssemblyProgressBar
         status={status}
         progress={assemblyProgress}
         error={assemblyError}
       />
-
-      <button
-        type="button"
-        onClick={() => setTranscriptOpen(true)}
-        aria-label="Expand transcript"
-        className="card p-3 space-y-1 text-left hover:bg-surface-2 transition-colors"
-      >
-        {preview[0] ? (
-          <p className="text-xs text-muted truncate">
-            {preview[0].text_preview}
-          </p>
-        ) : (
-          <p className="text-xs text-muted italic">—</p>
-        )}
-        {preview[1] ? (
-          <p className="text-sm text-fg font-medium truncate">
-            {preview[1].text_preview}
-          </p>
-        ) : (
-          <p className="text-sm text-muted italic">
-            {segmentTimings.length
-              ? "Press play to start"
-              : "No transcript available"}
-          </p>
-        )}
-        {preview[2] ? (
-          <p className="text-xs text-muted truncate">
-            {preview[2].text_preview}
-          </p>
-        ) : (
-          <p className="text-xs text-muted italic">—</p>
-        )}
-      </button>
 
       {/* Fixed bottom transport area — within thumb reach. */}
       <div
