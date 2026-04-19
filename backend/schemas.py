@@ -4,7 +4,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ProjectStatus = Literal[
-    "ingesting", "casting", "attributing", "generating", "assembling", "complete", "error"
+    "ingesting", "casting", "attributing", "attributed",
+    "generating", "assembling", "complete", "error"
+]
+
+# §6 render-mode vocabulary. Matches the CHECK constraint on segments.render_mode.
+RenderMode = Literal[
+    "prose", "dialogue", "epigraph", "letter", "poetry",
+    "song_lyrics", "emphasis", "thought", "chapter_heading",
 ]
 ProjectMode = Literal["automated", "director"]
 ChapterStatus = Literal["pending", "attributed", "generated", "assembled"]
@@ -234,3 +241,70 @@ class AutoCastResponse(BaseModel):
     request_path: str
     cast_size: int
     voice_library_size: int
+
+
+# --- Segments (§9.5) -------------------------------------------------------
+
+
+class SegmentCharacter(BaseModel):
+    """Expanded character info embedded in SegmentOut for the review UI."""
+    id: str
+    name: str
+    character_archetype: Optional[str] = None
+    voice_id: Optional[str] = None
+
+
+class SegmentOut(BaseModel):
+    id: str
+    chapter_id: str
+    order_index: int
+    text: str
+    render_mode: RenderMode
+    emotion_tags: list[str] = Field(default_factory=list)
+    confidence: Optional[int] = None
+    notes: Optional[str] = None
+    character: Optional[SegmentCharacter] = None
+    voice_override_id: Optional[str] = None
+    audio_path: Optional[str] = None
+    duration_ms: Optional[int] = None
+    status: str = "pending"
+    created_at: str
+    updated_at: str
+
+
+class SegmentUpdate(BaseModel):
+    """PATCH /api/segments/{id}. Manual-override surface for review."""
+    character_id: Optional[str] = None
+    render_mode: Optional[RenderMode] = None
+    emotion_tags: Optional[list[str]] = None
+    text: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class BulkReassignChanges(BaseModel):
+    character_id: Optional[str] = None
+    render_mode: Optional[RenderMode] = None
+    add_emotion_tags: Optional[list[str]] = None
+    remove_emotion_tags: Optional[list[str]] = None
+
+
+class BulkReassignRequest(BaseModel):
+    segment_ids: list[str]
+    changes: BulkReassignChanges
+
+
+class BulkReassignResponse(BaseModel):
+    updated: int
+
+
+class AttributeResponse(BaseModel):
+    job_id: str
+    request_path: str
+    chapter_chars: int
+    cast_size: int
+
+
+class AttributeAllResponse(BaseModel):
+    chapter_count: int
+    job_ids: list[str] = Field(default_factory=list)
+    skipped_chapter_ids: list[str] = Field(default_factory=list)  # already had segments
