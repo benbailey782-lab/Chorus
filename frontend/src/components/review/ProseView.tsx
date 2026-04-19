@@ -2,11 +2,15 @@ import { useEffect, useRef } from "react";
 
 import { CONFIDENCE } from "../../lib/constants";
 import type { RenderMode, Segment } from "../../lib/api";
+import { SegmentAudioIcon, getSegmentAudioState } from "./segment-audio";
 
 interface Props {
   segments: Segment[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Clicking the per-segment play icon selects the segment AND asks the
+   * DetailPanel to auto-play on mount. */
+  onPlay?: (id: string) => void;
 }
 
 // Render-mode → container class. Prose is the baseline; other modes layer
@@ -47,7 +51,12 @@ function ensureQuoted(text: string): string {
   return isQuoted ? text : `"${text}"`;
 }
 
-export default function ProseView({ segments, selectedId, onSelect }: Props) {
+export default function ProseView({
+  segments,
+  selectedId,
+  onSelect,
+  onPlay,
+}: Props) {
   // Scroll the selected segment into view when selection changes via
   // keyboard — without this, pressing j/k off-screen doesn't follow.
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -117,12 +126,45 @@ export default function ProseView({ segments, selectedId, onSelect }: Props) {
                 paddingLeft: "16px",
               }}
             >
-              <p
-                className={`${modeClasses(seg.render_mode)} leading-relaxed
-                            text-[15px] whitespace-pre-wrap`}
-              >
-                {displayText}
-              </p>
+              <div className="flex items-start gap-2">
+                <p
+                  className={`flex-1 min-w-0 ${modeClasses(seg.render_mode)} leading-relaxed
+                              text-[15px] whitespace-pre-wrap`}
+                >
+                  {displayText}
+                </p>
+                {(() => {
+                  const audioState = getSegmentAudioState(seg);
+                  const interactive =
+                    audioState === "generated" || audioState === "approved";
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!interactive) return;
+                        onSelect(seg.id);
+                        onPlay?.(seg.id);
+                      }}
+                      disabled={!interactive}
+                      title={
+                        audioState === "none"
+                          ? "No audio yet"
+                          : audioState === "generating"
+                            ? "Generating…"
+                            : audioState === "error"
+                              ? "Generation error"
+                              : "Play audio"
+                      }
+                      aria-label="Segment audio"
+                      className={`shrink-0 mt-1 h-4 w-4 grid place-items-center text-muted
+                                  ${interactive ? "hover:text-accent cursor-pointer" : "cursor-default"}`}
+                    >
+                      <SegmentAudioIcon state={audioState} size={16} />
+                    </button>
+                  );
+                })()}
+              </div>
               {seg.text_modified && (
                 <span
                   className="mt-1 inline-block text-[10px] uppercase tracking-wider

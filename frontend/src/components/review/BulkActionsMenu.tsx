@@ -21,7 +21,13 @@ interface Props {
   onDone: () => void;
 }
 
-type PickerKind = "reassign" | "mode" | "add_tag" | "remove_tag";
+type PickerKind =
+  | "reassign"
+  | "mode"
+  | "add_tag"
+  | "remove_tag"
+  | "approve_audio"
+  | "regenerate_audio";
 
 const ARCHETYPE_RANK: Record<string, number> = {
   main: 0,
@@ -235,6 +241,65 @@ export default function BulkActionsMenu({
     onDone();
   }
 
+  // ---- Bulk audio actions (Phase 5) --------------------------------------
+
+  // Approve audio only for segments that have a generated track but haven't
+  // yet been approved; the rest are silently skipped (reported as M skipped).
+  async function runApproveAudio() {
+    const candidates = selectedSegments.filter(
+      (seg) => seg.audio_path && !seg.approved_at,
+    );
+    const skipped = selectedSegments.length - candidates.length;
+    if (candidates.length === 0) {
+      toast({
+        kind: "info",
+        message: `No eligible segments (${skipped} skipped — no audio or already approved).`,
+      });
+      closeAll();
+      onDone();
+      return;
+    }
+    const results = await Promise.allSettled(
+      candidates.map((seg) => api.approveSegment(seg.id)),
+    );
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    invalidate();
+    if (chapterId) {
+      qc.invalidateQueries({ queryKey: ["gen-status", chapterId] });
+    }
+    const parts = [`${ok} approved`];
+    if (skipped > 0) parts.push(`${skipped} skipped (no audio)`);
+    if (failed > 0) parts.push(`${failed} failed`);
+    toast({
+      kind: failed === 0 ? "success" : "error",
+      message: parts.join(", ") + ".",
+    });
+    closeAll();
+    onDone();
+  }
+
+  async function runRegenerateAudio() {
+    const results = await Promise.allSettled(
+      selectedSegments.map((seg) => api.regenerateSegment(seg.id)),
+    );
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    invalidate();
+    if (chapterId) {
+      qc.invalidateQueries({ queryKey: ["gen-status", chapterId] });
+    }
+    toast({
+      kind: failed === 0 ? "success" : "error",
+      message:
+        failed === 0
+          ? `${ok} queued for regeneration.`
+          : `${ok} queued, ${failed} failed.`,
+    });
+    closeAll();
+    onDone();
+  }
+
   async function runRemoveTag() {
     if (removeTags.size === 0) return;
     const lowered = new Set(
@@ -277,6 +342,8 @@ export default function BulkActionsMenu({
     { key: "mode", label: "Set render mode" },
     { key: "add_tag", label: "Add emotion tag" },
     { key: "remove_tag", label: "Remove emotion tag" },
+    { key: "approve_audio", label: "Approve audio for selected" },
+    { key: "regenerate_audio", label: "Regenerate audio for selected" },
   ];
 
   return (
@@ -514,6 +581,69 @@ export default function BulkActionsMenu({
           }
           confirmLabel="Add tag"
           onConfirm={runAddTag}
+        />
+      )}
+
+      {picker === "approve_audio" && (
+        <BulkConfirmModal
+          open={true}
+          onClose={closeAll}
+          title="Approve audio for selected"
+          summary={
+            <div className="space-y-2">
+              <p>
+                Approve audio for {count} selected segment
+                {count === 1 ? "" : "s"}. Segments without generated audio will
+                be skipped.
+              </p>
+              {(() => {
+                const eligible = selectedSegments.filter(
+                  (s) => s.audio_path && !s.approved_at,
+                ).length;
+                const alreadyApproved = selectedSegments.filter(
+                  (s) => s.approved_at,
+                ).length;
+                const noAudio = selectedSegments.filter(
+                  (s) => !s.audio_path,
+                ).length;
+                return (
+                  <ul className="text-[11px] text-muted space-y-0.5">
+                    <li>{eligible} eligible</li>
+                    {alreadyApproved > 0 && (
+                      <li>{alreadyApproved} already approved</li>
+                    )}
+                    {noAudio > 0 && <li>{noAudio} have no audio yet</li>}
+                  </ul>
+                );
+              })()}
+            </div>
+          }
+          confirmLabel="Approve"
+          onConfirm={runApproveAudio}
+        />
+      )}
+
+      {picker === "regenerate_audio" && (
+        <BulkConfirmModal
+          open={true}
+          onClose={closeAll}
+          title="Regenerate audio for selected"
+          summary={
+            <div className="space-y-2">
+              <p>
+                Queue {count} segment{count === 1 ? "" : "s"} for
+                regeneration. This will replace any existing generated take
+                (approved takes are preserved server-side per the generation
+                API).
+              </p>
+              <p className="text-[11px] text-muted">
+                Voicebox must be online for queued jobs to complete.
+              </p>
+            </div>
+          }
+          confirmLabel="Regenerate"
+          destructive
+          onConfirm={runRegenerateAudio}
         />
       )}
 

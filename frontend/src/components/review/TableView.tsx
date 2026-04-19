@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { CONFIDENCE } from "../../lib/constants";
 import type { Segment } from "../../lib/api";
+import { SegmentAudioIcon, getSegmentAudioState } from "./segment-audio";
 
 interface Props {
   segments: Segment[];
@@ -11,6 +12,7 @@ interface Props {
   onToggleSelect: (id: string) => void;
   onSelectAll: (ids: string[]) => void;
   onClearSelection: () => void;
+  onPlay?: (id: string) => void;
 }
 
 type SortKey = "order" | "speaker" | "mode" | "confidence";
@@ -105,6 +107,7 @@ export default function TableView({
   onToggleSelect,
   onSelectAll,
   onClearSelection,
+  onPlay,
 }: Props) {
   const [sort, setSort] = useState<SortState>({ key: "order", dir: "asc" });
 
@@ -188,6 +191,7 @@ export default function TableView({
             />
             <Th label="Tags" sort={sort} onSort={toggleSort} className="w-40" />
             <Th label="Preview" sort={sort} onSort={toggleSort} />
+            <Th label="Audio" sort={sort} onSort={toggleSort} className="w-12" />
             <Th label="Notes" sort={sort} onSort={toggleSort} className="w-10" />
           </tr>
         </thead>
@@ -294,6 +298,44 @@ export default function TableView({
                   title={seg.text}
                 >
                   {preview}
+                </td>
+                <td
+                  className="px-2 py-1.5 align-middle text-center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {(() => {
+                    const audioState = getSegmentAudioState(seg);
+                    const interactive =
+                      audioState === "generated" || audioState === "approved";
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!interactive) return;
+                          onSelect(seg.id);
+                          onPlay?.(seg.id);
+                        }}
+                        disabled={!interactive}
+                        className={`h-5 w-5 inline-grid place-items-center text-muted ${
+                          interactive
+                            ? "hover:text-accent cursor-pointer"
+                            : "cursor-default"
+                        }`}
+                        aria-label="Segment audio"
+                        title={
+                          audioState === "none"
+                            ? "No audio yet"
+                            : audioState === "generating"
+                              ? "Generating…"
+                              : audioState === "error"
+                                ? "Generation error"
+                                : "Play audio"
+                        }
+                      >
+                        <SegmentAudioIcon state={audioState} size={14} />
+                      </button>
+                    );
+                  })()}
                 </td>
                 <td
                   className="px-2 py-1.5 align-top text-center"

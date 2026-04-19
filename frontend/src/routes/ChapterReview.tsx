@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import BulkActionsMenu from "../components/review/BulkActionsMenu";
 import DetailPanel from "../components/review/DetailPanel";
+import GenerateModal from "../components/review/GenerateModal";
+import GenerationProgressBar from "../components/review/GenerationProgressBar";
 import KeyboardHelp from "../components/review/KeyboardHelp";
 import ProseView from "../components/review/ProseView";
 import ReviewFilters from "../components/review/ReviewFilters";
@@ -39,6 +41,11 @@ export default function ChapterReview() {
   const [filters, setFilters] = useState<ReviewFiltersState>(() =>
     loadFilters(chapterId),
   );
+  const [generateModalOpen, setGenerateModalOpen] = useState(false);
+  // When a user clicks a segment's play icon in the list views we want the
+  // DetailPanel to autoplay on next mount/select. Cleared by DetailPanel once
+  // consumed.
+  const [playOnSelect, setPlayOnSelect] = useState(false);
   // Mobile bottom-sheet detection. `null` until mount so SSR/first paint
   // matches whatever the responsive layout had — we only treat it as mobile
   // once matchMedia confirms.
@@ -113,6 +120,35 @@ export default function ChapterReview() {
     queryKey: ["characters", idOrSlug],
     queryFn: () => api.listCharacters(idOrSlug),
     enabled: !!idOrSlug,
+  });
+
+  // Phase-5 generation queries. Voicebox health is global; estimate is
+  // per-chapter + short-lived; status is polled while anything is in flight.
+  const { data: voiceboxHealth } = useQuery({
+    queryKey: ["voicebox-health"],
+    queryFn: api.voiceboxHealth,
+    staleTime: 30_000,
+  });
+
+  const { data: genEstimate } = useQuery({
+    queryKey: ["gen-estimate", chapterId],
+    queryFn: () => api.chapterGenerationEstimate(chapterId),
+    enabled: !!chapterId,
+    staleTime: 10_000,
+  });
+
+  const { data: genStatus } = useQuery({
+    queryKey: ["gen-status", chapterId],
+    queryFn: () => api.chapterGenerationStatus(chapterId),
+    enabled: !!chapterId,
+    refetchInterval: (q) => {
+      const d = q.state.data as
+        | { in_progress_job_ids?: string[] }
+        | undefined;
+      return d?.in_progress_job_ids && d.in_progress_job_ids.length > 0
+        ? 2000
+        : false;
+    },
   });
 
   const allSegments = segments.data ?? [];
@@ -310,6 +346,33 @@ export default function ChapterReview() {
               </button>
             </div>
 
+            {(() => {
+              const ungenerated = genEstimate?.segments ?? 0;
+              const voiceboxReachable = !!(
+                voiceboxHealth?.enabled && voiceboxHealth.reachable
+              );
+              const canGenerate = ungenerated > 0;
+              const styleClass =
+                canGenerate && voiceboxReachable ? "btn-primary" : "btn-surface";
+              return (
+                <button
+                  type="button"
+                  disabled={!canGenerate}
+                  onClick={() => setGenerateModalOpen(true)}
+                  title={
+                    !canGenerate
+                      ? "All segments already have audio"
+                      : voiceboxReachable
+                        ? "Generate audio for ungenerated segments"
+                        : "Generate (Voicebox offline)"
+                  }
+                  className={`${styleClass} min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  Generate ({ungenerated})
+                </button>
+              );
+            })()}
+
             <button
               type="button"
               onClick={() => setFiltersOpen(true)}
@@ -364,6 +427,11 @@ export default function ChapterReview() {
             </button>
           </div>
         </div>
+        {genStatus &&
+          genStatus.in_progress_job_ids &&
+          genStatus.in_progress_job_ids.length > 0 && (
+            <GenerationProgressBar status={genStatus} estimate={genEstimate} />
+          )}
       </div>
 
       {/* Main area ------------------------------------------------------- */}
@@ -380,6 +448,10 @@ export default function ChapterReview() {
               segments={segs}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              onPlay={(id) => {
+                setSelectedId(id);
+                setPlayOnSelect(true);
+              }}
             />
           ) : (
             <>
@@ -397,6 +469,10 @@ export default function ChapterReview() {
                 onToggleSelect={toggleSelect}
                 onSelectAll={selectAll}
                 onClearSelection={clearSelection}
+                onPlay={(id) => {
+                  setSelectedId(id);
+                  setPlayOnSelect(true);
+                }}
               />
             </>
           )}
@@ -407,6 +483,10 @@ export default function ChapterReview() {
             <DetailPanel
               segment={selectedSegment}
               characters={filterCharacters}
+              voiceboxHealth={voiceboxHealth}
+              autoPlay={playOnSelect}
+              onAutoPlayConsumed={() => setPlayOnSelect(false)}
+              chapterId={chapterId}
               onSaved={() =>
                 queryClient.invalidateQueries({
                   queryKey: ["segments", chapterId],
@@ -436,6 +516,10 @@ export default function ChapterReview() {
               <DetailPanel
                 segment={selectedSegment}
                 characters={filterCharacters}
+                voiceboxHealth={voiceboxHealth}
+                autoPlay={playOnSelect}
+                onAutoPlayConsumed={() => setPlayOnSelect(false)}
+                chapterId={chapterId}
                 onClose={() => setSelectedId(null)}
                 onSaved={() =>
                   queryClient.invalidateQueries({
@@ -460,6 +544,14 @@ export default function ChapterReview() {
       />
 
       <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      <GenerateModal
+        open={generateModalOpen}
+        onClose={() => setGenerateModalOpen(false)}
+        chapterId={chapterId}
+        estimate={genEstimate}
+        voiceboxHealth={voiceboxHealth}
+      />
     </div>
   );
 }

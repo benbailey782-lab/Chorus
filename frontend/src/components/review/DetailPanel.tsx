@@ -20,12 +20,27 @@ import {
   type Segment,
   type SegmentCharacter,
   type SegmentUpdate,
+  type VoiceboxHealth,
 } from "../../lib/api";
 import { useToast } from "../../lib/toast";
+import {
+  SegmentAudioIcon,
+  formatDurationMs,
+  getSegmentAudioState,
+  segmentAudioTitle,
+  type SegmentAudioState,
+} from "./segment-audio";
 
 interface Props {
   segment: Segment | null;
   characters: SegmentCharacter[];
+  voiceboxHealth?: VoiceboxHealth | undefined;
+  /** When true, attempt to auto-play this segment's audio on mount/select. */
+  autoPlay?: boolean;
+  /** Called after an auto-play attempt so the parent can clear the flag. */
+  onAutoPlayConsumed?: () => void;
+  /** Chapter id for cache invalidation of generation queries. */
+  chapterId?: string;
   onClose?: () => void;
   onSaved?: (updated: Segment) => void;
 }
@@ -162,12 +177,20 @@ function EmptyState() {
 export default function DetailPanel({
   segment,
   characters,
+  voiceboxHealth,
+  autoPlay,
+  onAutoPlayConsumed,
+  chapterId,
   onClose,
   onSaved,
 }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const qc = useQueryClient();
   const { toast } = useToast();
+  const voiceboxReachable = !!(
+    voiceboxHealth?.enabled && voiceboxHealth.reachable
+  );
 
   // Rebuild initialDraft whenever the selected segment's id or server-side
   // updated_at changes — the latter ensures we reset after a successful save
@@ -231,9 +254,103 @@ export default function DetailPanel({
     mutation.mutate();
   }, [segment, isDirty, mutation]);
 
+  // ---- Audio mutations (Phase 5) ---------------------------------------
+  function invalidateAudio() {
+    if (segment) {
+      qc.invalidateQueries({ queryKey: ["segments", segment.chapter_id] });
+    }
+    if (chapterId) {
+      qc.invalidateQueries({ queryKey: ["gen-status", chapterId] });
+    }
+  }
+
+  const generateMut = useMutation({
+    mutationFn: async () => {
+      if (!segment) throw new Error("No segment selected");
+      return api.generateSegment(segment.id);
+    },
+    onSuccess: () => {
+      toast({ kind: "success", message: "Queued for generation." });
+      invalidateAudio();
+    },
+    onError: (err: unknown) => {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to queue generation.";
+      toast({ kind: "error", message });
+    },
+  });
+
+  const regenerateMut = useMutation({
+    mutationFn: async () => {
+      if (!segment) throw new Error("No segment selected");
+      return api.regenerateSegment(segment.id);
+    },
+    onSuccess: () => {
+      toast({ kind: "success", message: "Regeneration queued." });
+      invalidateAudio();
+    },
+    onError: (err: unknown) => {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to queue regeneration.";
+      toast({ kind: "error", message });
+    },
+  });
+
+  const approveMut = useMutation({
+    mutationFn: async () => {
+      if (!segment) throw new Error("No segment selected");
+      return api.approveSegment(segment.id);
+    },
+    onSuccess: () => {
+      toast({ kind: "success", message: "Audio approved." });
+      invalidateAudio();
+    },
+    onError: (err: unknown) => {
+      const message =
+        err instanceof Error && err.message ? err.message : "Approve failed.";
+      toast({ kind: "error", message });
+    },
+  });
+
+  const rejectMut = useMutation({
+    mutationFn: async () => {
+      if (!segment) throw new Error("No segment selected");
+      return api.rejectSegment(segment.id);
+    },
+    onSuccess: () => {
+      toast({ kind: "success", message: "Audio rejected." });
+      invalidateAudio();
+    },
+    onError: (err: unknown) => {
+      const message =
+        err instanceof Error && err.message ? err.message : "Reject failed.";
+      toast({ kind: "error", message });
+    },
+  });
+
   const cancel = useCallback(() => {
     setDraft(initialDraft);
   }, [initialDraft]);
+
+  // When the parent asks us to auto-play (via `autoPlay` flag), fire play()
+  // once the <audio> element exists. Consumed flag is cleared upstream.
+  useEffect(() => {
+    if (!autoPlay || !segment) return;
+    const el = audioRef.current;
+    if (!el) return;
+    // Defer a tick so the src attribute is wired.
+    const h = setTimeout(() => {
+      el.play().catch(() => {
+        /* autoplay blocked / no source — silent */
+      });
+      onAutoPlayConsumed?.();
+    }, 0);
+    return () => clearTimeout(h);
+  }, [autoPlay, segment, onAutoPlayConsumed]);
 
   // Ctrl/Cmd+Enter save while focus is inside the panel.
   useEffect(() => {
@@ -445,28 +562,22 @@ export default function DetailPanel({
           </div>
         </div>
 
-        <button
-          type="button"
-          disabled
-          title="Voicebox required (Phase 5)"
-          className="btn-surface w-full min-h-tap opacity-60 cursor-not-allowed
-                     inline-flex items-center justify-center gap-2"
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <polygon points="6 4 20 12 6 20 6 4" />
-          </svg>
-          Preview audio
-        </button>
+        {/* Audio section (Phase 5) ----------------------------------- */}
+        <AudioSection
+          segment={segment}
+          audioRef={audioRef}
+          voiceboxReachable={voiceboxReachable}
+          onGenerate={() => generateMut.mutate()}
+          onRegenerate={() => regenerateMut.mutate()}
+          onApprove={() => approveMut.mutate()}
+          onReject={() => rejectMut.mutate()}
+          busy={{
+            generate: generateMut.isPending,
+            regenerate: regenerateMut.isPending,
+            approve: approveMut.isPending,
+            reject: rejectMut.isPending,
+          }}
+        />
       </div>
 
       {/* Sticky save bar ------------------------------------------------ */}
@@ -491,6 +602,201 @@ export default function DetailPanel({
         >
           {mutation.isPending ? "Saving\u2026" : "Save"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------
+// Audio section — renders status badge, metadata, <audio>, and state-aware
+// action buttons. Kept inside this module because it's coupled to DetailPanel
+// lifecycle.
+// -----------------------------------------------------------------------
+
+interface AudioSectionProps {
+  segment: Segment;
+  audioRef: React.MutableRefObject<HTMLAudioElement | null>;
+  voiceboxReachable: boolean;
+  onGenerate: () => void;
+  onRegenerate: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+  busy: {
+    generate: boolean;
+    regenerate: boolean;
+    approve: boolean;
+    reject: boolean;
+  };
+}
+
+function stateBadgeStyle(state: SegmentAudioState): {
+  label: string;
+  color: string;
+} {
+  switch (state) {
+    case "approved":
+      return { label: "Approved", color: "#10B981" };
+    case "generated":
+      return { label: "Generated", color: "#4EC8BE" };
+    case "generating":
+      return { label: "Generating…", color: "#F59E0B" };
+    case "error":
+      return { label: "Error", color: "#EF4444" };
+    case "none":
+    default:
+      return { label: "No audio", color: "#6B6B70" };
+  }
+}
+
+function AudioSection({
+  segment,
+  audioRef,
+  voiceboxReachable,
+  onGenerate,
+  onRegenerate,
+  onApprove,
+  onReject,
+  busy,
+}: AudioSectionProps) {
+  const state = getSegmentAudioState(segment);
+  const { label, color } = stateBadgeStyle(state);
+  const audioUrl =
+    state === "approved"
+      ? `${api.segmentAudioUrl(segment.id, true)}?t=${encodeURIComponent(
+          segment.updated_at,
+        )}`
+      : state === "generated" || state === "error"
+        ? `${api.segmentAudioUrl(segment.id, false)}?t=${encodeURIComponent(
+            segment.updated_at,
+          )}`
+        : null;
+  const durationLabel = formatDurationMs(segment.duration_ms);
+
+  return (
+    <div className="space-y-2 border-t border-border pt-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-[11px] uppercase tracking-wider text-muted">
+          Audio
+        </span>
+        <span
+          className="chip text-[10px] uppercase tracking-wider inline-flex items-center gap-1.5"
+          style={{ color, borderColor: color }}
+          title={segmentAudioTitle(state)}
+        >
+          <SegmentAudioIcon state={state} size={12} />
+          {label}
+        </span>
+      </div>
+
+      <div className="text-[11px] text-muted font-mono flex items-center gap-3 flex-wrap">
+        {segment.updated_at && (
+          <span title={`Last updated ${segment.updated_at}`}>
+            {new Date(segment.updated_at).toLocaleString()}
+          </span>
+        )}
+        {durationLabel && <span>· {durationLabel}</span>}
+      </div>
+
+      {audioUrl && (
+        <audio
+          ref={audioRef}
+          controls
+          src={audioUrl}
+          className="w-full"
+          preload="metadata"
+        />
+      )}
+
+      {state === "error" && segment.notes && (
+        <p className="text-[11px] text-error">{segment.notes}</p>
+      )}
+
+      {/* Action buttons --------------------------------------------- */}
+      <div className="flex flex-wrap gap-2 pt-1">
+        {state === "none" && (
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={!voiceboxReachable || busy.generate}
+            title={
+              voiceboxReachable
+                ? "Generate audio for this segment"
+                : "Voicebox must be online"
+            }
+            className="btn-primary min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {busy.generate ? "Queuing…" : "Generate"}
+          </button>
+        )}
+
+        {state === "generating" && (
+          <span className="inline-flex items-center gap-2 text-xs text-muted">
+            <SegmentAudioIcon state="generating" size={14} />
+            Generating…
+          </span>
+        )}
+
+        {(state === "generated" || state === "approved") && (
+          <>
+            <button
+              type="button"
+              onClick={() => audioRef.current?.play()}
+              className="btn-surface min-h-tap text-xs"
+              title="Play"
+            >
+              Play
+            </button>
+            {state === "generated" && (
+              <button
+                type="button"
+                onClick={onApprove}
+                disabled={busy.approve}
+                className="btn-primary min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Approve this take"
+              >
+                {busy.approve ? "Approving…" : "Approve"}
+              </button>
+            )}
+            {state === "approved" && (
+              <button
+                type="button"
+                onClick={onReject}
+                disabled={busy.reject}
+                className="btn-ghost min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Clear approval"
+              >
+                {busy.reject ? "Rejecting…" : "Reject"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onRegenerate}
+              disabled={!voiceboxReachable || busy.regenerate}
+              className="btn-ghost min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                voiceboxReachable
+                  ? "Generate a new take"
+                  : "Voicebox must be online"
+              }
+            >
+              {busy.regenerate ? "Queuing…" : "Regenerate"}
+            </button>
+          </>
+        )}
+
+        {state === "error" && (
+          <button
+            type="button"
+            onClick={onRegenerate}
+            disabled={!voiceboxReachable || busy.regenerate}
+            className="btn-primary min-h-tap text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            title={
+              voiceboxReachable ? "Retry generation" : "Voicebox must be online"
+            }
+          >
+            {busy.regenerate ? "Queuing…" : "Retry"}
+          </button>
+        )}
       </div>
     </div>
   );
