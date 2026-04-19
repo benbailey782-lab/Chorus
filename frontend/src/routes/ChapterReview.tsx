@@ -4,8 +4,21 @@ import { useQuery } from "@tanstack/react-query";
 
 import KeyboardHelp from "../components/review/KeyboardHelp";
 import ProseView from "../components/review/ProseView";
+import ReviewFilters from "../components/review/ReviewFilters";
 import StatusBar from "../components/review/StatusBar";
-import { api, type Job } from "../lib/api";
+import TableView from "../components/review/TableView";
+import { api, type Character, type Job, type SegmentCharacter } from "../lib/api";
+import {
+  EMPTY_FILTERS,
+  applyFilters,
+  countActiveFilters,
+  loadFilters,
+  loadViewMode,
+  saveFilters,
+  saveViewMode,
+  type ReviewFiltersState,
+  type ViewMode,
+} from "../lib/review-filters";
 
 const ACTIVE_STATUSES = new Set<Job["status"]>([
   "queued",
@@ -13,32 +26,32 @@ const ACTIVE_STATUSES = new Set<Job["status"]>([
   "awaiting_response",
 ]);
 
-const VIEW_MODE_KEY = "review:view-mode";
-type ViewMode = "prose" | "table";
-
-function readInitialViewMode(): ViewMode {
-  try {
-    const raw = localStorage.getItem(VIEW_MODE_KEY);
-    if (raw === "table" || raw === "prose") return raw;
-  } catch {
-    /* SSR / storage blocked — fall through */
-  }
-  return "prose";
-}
-
 export default function ChapterReview() {
   const { idOrSlug = "", chapterId = "" } = useParams();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>(readInitialViewMode);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [viewMode, setViewMode] = useState<ViewMode>(() => loadViewMode());
   const [helpOpen, setHelpOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState<ReviewFiltersState>(() =>
+    loadFilters(chapterId),
+  );
+
+  // When the route-level chapterId changes (e.g., user navigates between
+  // chapters without a full remount) re-load the stored filter set for that
+  // chapter so each chapter keeps its own filter memory.
+  useEffect(() => {
+    setFilters(loadFilters(chapterId));
+    setSelectedIds(new Set());
+  }, [chapterId]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(VIEW_MODE_KEY, viewMode);
-    } catch {
-      /* ignore */
-    }
+    saveViewMode(viewMode);
   }, [viewMode]);
+
+  useEffect(() => {
+    saveFilters(chapterId, filters);
+  }, [chapterId, filters]);
 
   const chapter = useQuery({
     queryKey: ["chapter", chapterId],
@@ -82,20 +95,65 @@ export default function ChapterReview() {
   // Characters: Casting.tsx uses ["characters", idOrSlug] and
   // api.listCharacters — keep them the same cache-key so both routes share
   // data.
-  useQuery({
+  const charactersQuery = useQuery({
     queryKey: ["characters", idOrSlug],
     queryFn: () => api.listCharacters(idOrSlug),
     enabled: !!idOrSlug,
   });
 
-  const segs = segments.data ?? [];
+  const allSegments = segments.data ?? [];
 
-  // Default-select the first segment when data lands so keyboard nav works
-  // without clicking first.
+  const visibleSegments = useMemo(
+    () => applyFilters(allSegments, filters),
+    [allSegments, filters],
+  );
+
+  // The ReviewFilters speaker list expects SegmentCharacter-shaped rows. The
+  // full Character object from Casting has extra fields we don't need here;
+  // narrow to the subset the filter UI uses so we can drop the extras cheaply.
+  const filterCharacters = useMemo<SegmentCharacter[]>(() => {
+    const rows = (charactersQuery.data ?? []) as Character[];
+    return rows.map((c) => ({
+      id: c.id,
+      name: c.name,
+      character_archetype: c.character_archetype,
+      voice_id: c.voice_id,
+    }));
+  }, [charactersQuery.data]);
+
+  // Default-select the first *visible* segment when data lands so keyboard
+  // nav follows the filtered set. If the currently selected id is filtered
+  // out, reset to the first visible.
   useEffect(() => {
-    if (selectedId) return;
-    if (segs.length > 0) setSelectedId(segs[0].id);
-  }, [segs, selectedId]);
+    if (visibleSegments.length === 0) return;
+    if (!selectedId || !visibleSegments.some((s) => s.id === selectedId)) {
+      setSelectedId(visibleSegments[0].id);
+    }
+  }, [visibleSegments, selectedId]);
+
+  // Reference kept for keyboard-nav convenience; j/k walk the currently
+  // visible (filtered) set.
+  const segs = visibleSegments;
+
+  const activeFilterCount = countActiveFilters(filters);
+
+  // Multi-select helpers (TableView → row checkboxes + select-all). The full
+  // BulkActionsMenu lands in P8; here we just own the Set<string> so it's
+  // ready to plug in.
+  function toggleSelect(id: string) {
+    setSelectedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function selectAll(ids: string[]) {
+    setSelectedIds(new Set(ids));
+  }
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
 
   // Keyboard shortcuts — suppressed when focus is in an editable element so
   // typing doesn't accidentally navigate.
@@ -174,7 +232,10 @@ export default function ChapterReview() {
           </Link>
 
           <span className="chip text-[10px] uppercase tracking-wider text-muted">
-            {(ch.word_count ?? 0).toLocaleString()} words · {segs.length} segs
+            {(ch.word_count ?? 0).toLocaleString()} words · {allSegments.length} segs
+            {visibleSegments.length !== allSegments.length && (
+              <> · {visibleSegments.length} shown</>
+            )}
           </span>
 
           {ch.pov_character_name && (
@@ -222,11 +283,21 @@ export default function ChapterReview() {
 
             <button
               type="button"
-              disabled
-              title="Filters coming next"
-              className="btn-ghost min-h-tap text-xs opacity-60 cursor-not-allowed"
+              onClick={() => setFiltersOpen(true)}
+              title="Filters"
+              className="btn-ghost min-h-tap text-xs relative"
             >
               Filters
+              {activeFilterCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -top-1 -right-1 bg-accent text-black
+                             text-[10px] font-bold rounded-full h-5 w-5
+                             grid place-items-center"
+                >
+                  {activeFilterCount}
+                </span>
+              )}
             </button>
 
             <button
@@ -235,7 +306,7 @@ export default function ChapterReview() {
               title="Bulk actions coming in a later commit"
               className="btn-ghost min-h-tap text-xs opacity-60 cursor-not-allowed"
             >
-              Bulk
+              Bulk {selectedIds.size > 0 && <>({selectedIds.size})</>}
             </button>
 
             <button
@@ -254,36 +325,28 @@ export default function ChapterReview() {
       {/* Main area ------------------------------------------------------- */}
       <div className="flex-1 grid gap-4 mt-4 md:grid-cols-[3fr_2fr]">
         <div className="min-w-0">
-          {viewMode === "prose" ? (
-            segments.isLoading ? (
-              <p className="text-muted text-sm">Loading segments…</p>
-            ) : segments.isError ? (
-              <p className="text-error text-sm">
-                {(segments.error as Error).message}
-              </p>
-            ) : (
-              <ProseView
-                segments={segs}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-              />
-            )
+          {segments.isLoading ? (
+            <p className="text-muted text-sm">Loading segments…</p>
+          ) : segments.isError ? (
+            <p className="text-error text-sm">
+              {(segments.error as Error).message}
+            </p>
+          ) : viewMode === "prose" ? (
+            <ProseView
+              segments={segs}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+            />
           ) : (
-            <div className="card p-6 text-sm text-muted">
-              <div className="font-display text-lg text-fg">Table view</div>
-              <p className="mt-2">
-                Coming next — the dense editable grid lands in a later commit
-                this phase. For now, switch to{" "}
-                <button
-                  type="button"
-                  className="text-accent underline"
-                  onClick={() => setViewMode("prose")}
-                >
-                  Prose
-                </button>{" "}
-                to review segments.
-              </p>
-            </div>
+            <TableView
+              segments={segs}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onSelectAll={selectAll}
+              onClearSelection={clearSelection}
+            />
           )}
         </div>
 
@@ -307,7 +370,16 @@ export default function ChapterReview() {
         </aside>
       </div>
 
-      <StatusBar segments={segs} />
+      <StatusBar segments={visibleSegments} />
+
+      <ReviewFilters
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        filters={filters}
+        onChange={setFilters}
+        onClear={() => setFilters(EMPTY_FILTERS)}
+        characters={filterCharacters}
+      />
 
       <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
