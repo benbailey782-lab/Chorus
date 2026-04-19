@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     voicebox_enabled: bool = False
 
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 8765
 
     data_dir: str = "./data"
     db_path: str = "./data/chorus.db"

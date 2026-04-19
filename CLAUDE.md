@@ -7,7 +7,7 @@
 - **Frontend:** React 18 + Vite + TypeScript + Tailwind + Zustand + TanStack Query (`frontend/`).
 - **LLM:** Anthropic SDK. Opus 4.7 for cast extraction + low-confidence attribution. Sonnet 4.6 for bulk per-chapter work.
 - **TTS:** Voicebox REST API (expected at `VOICEBOX_BASE_URL`, default `http://localhost:5173` on Mac).
-- **Deploy model:** Mac runs backend; phone connects via `http://chorus.local:8080` as a PWA.
+- **Deploy model:** Mac runs backend; phone connects via `http://chorus.local:8765` as a PWA.
 
 ## Current status
 
@@ -21,8 +21,8 @@
 
 - NLP prompts live in `backend/nlp/prompts/*.md` — edit those files, do not inline prompts in Python.
 - SQLite schema in `backend/db.py` (single canonical `SCHEMA_SQL`). When you change the schema, bump `SCHEMA_VERSION` and add a migration in `_run_migrations` rather than mutating `SCHEMA_SQL` in place. Destructive migrations must abort with `MigrationAborted` if the affected table has rows.
-- FastAPI binds `0.0.0.0:8080` so the phone can reach it on LAN.
-- Vite dev server binds `0.0.0.0:5173` and proxies `/api` → backend `:8080`.
+- FastAPI binds `0.0.0.0:8765` so the phone can reach it on LAN.
+- Vite dev server binds `0.0.0.0:5173` and proxies `/api` → backend `:8765`.
 - IDs: UUIDv4 strings. Slugs: lowercase kebab, unique per project. Voice ids: `v_<slug>_<hex6>`.
 - Design tokens: §15.8 (dark palette, Chorus teal `#4EC8BE`). Never use the retired Phase-1 `ink`/`parchment` tokens.
 - Reusable Tailwind component classes live in `frontend/src/index.css` (`btn-primary`, `btn-surface`, `btn-ghost`, `btn-danger`, `input`, `card`, `chip`). Prefer these over ad-hoc utility clusters.
@@ -42,12 +42,12 @@ scripts\run.bat
 # manual
 python -m venv .venv && source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
-uvicorn backend.main:app --host 0.0.0.0 --port 8080 --reload
+uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
 (cd frontend && npm install && npm run dev -- --host 0.0.0.0)
 ```
 
-Health check: `curl http://localhost:8080/api/health`.
-From phone on same WiFi: `http://chorus.local:8080/api/health` (mDNS advertised).
+Health check: `curl http://localhost:8765/api/health`.
+From phone on same WiFi: `http://chorus.local:8765/api/health` (mDNS advertised).
 
 ## Verification scripts
 

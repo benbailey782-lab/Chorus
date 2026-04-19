@@ -104,17 +104,17 @@ Chorus runs on the Mac because Voicebox runs on the Mac. The phone accesses it v
 │   Ben's iPhone     │         │   Ben's MacBook    │
 │                    │         │                    │
 │   Safari →         │◄────────┤   Chorus Backend   │
-│   chorus.local:    │  WiFi   │   :8080            │
-│   8080             │  LAN    │                    │
+│   chorus.local:    │  WiFi   │   :8765            │
+│   8765             │  LAN    │                    │
 │                    │         │   Voicebox         │
 │                    │         │   :5173            │
 └────────────────────┘         └────────────────────┘
 ```
 
 **Concretely:**
-- FastAPI binds to `0.0.0.0:8080` (not just localhost)
+- FastAPI binds to `0.0.0.0:8765` (not just localhost)
 - Bonjour/mDNS advertises the service as `chorus.local` via `zeroconf`
-- Phone accesses `http://chorus.local:8080` in Safari
+- Phone accesses `http://chorus.local:8765` in Safari
 - The web UI is a Progressive Web App — "Add to Home Screen" behaves like a native app
 - Listening works as long as Mac is on the same WiFi and awake (Chorus's own keep-awake mode activates during active playback sessions, leveraging `caffeinate` like KeepAwake.py)
 - For offline mobile listening: in-app "Send to Files" button AirDrops the M4B to the phone where Apple Books picks it up with full chapter support
@@ -129,7 +129,7 @@ Chorus runs on the Mac because Voicebox runs on the Mac. The phone accesses it v
                                      │ REST + SSE
                     ┌────────────────▼──────────────────────┐
                     │          Chorus Backend               │
-                    │          (FastAPI, :8080)             │
+                    │          (FastAPI, :8765)             │
                     │                                       │
                     │  ┌─────────┐ ┌─────────┐ ┌─────────┐  │
                     │  │ Ingest  │ │  NLP    │ │ Audio   │  │
@@ -844,7 +844,7 @@ Each phase has a hard exit criterion. Do not advance until it's met.
 - Anthropic API verification script
 - `scripts/run.sh` starts backend + frontend dev, opens browser, advertises mDNS
 
-**Exit:** `http://chorus.local:8080/api/health` returns OK from phone on same WiFi.
+**Exit:** `http://chorus.local:8765/api/health` returns OK from phone on same WiFi.
 
 ### Phase 1 — Ingestion + Library (Days 2–3)
 - TXT upload + naive chapter detection
@@ -963,7 +963,7 @@ Items marked for discussion before or during implementation:
 ### Startup
 1. `scripts/setup.sh` — venv, pip install, npm install, DB migrate
 2. Ensure Voicebox is running separately (Chorus checks on startup)
-3. `scripts/run.sh` — Starts FastAPI on `0.0.0.0:8080`, Vite dev on `:5174` proxied through FastAPI, advertises mDNS as `chorus.local`, opens browser
+3. `scripts/run.sh` — Starts FastAPI on `0.0.0.0:8765`, Vite dev on `:5174` proxied through FastAPI, advertises mDNS as `chorus.local`, opens browser
 4. Keep-awake helper runs in background if generation jobs are active
 
 ### Dual-Claude Workflow

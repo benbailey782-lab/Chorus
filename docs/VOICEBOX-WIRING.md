@@ -141,7 +141,7 @@ duplicated; this table is the same info in checklist form.
 
 1. Set `VOICEBOX_ENABLED=true` and point `VOICEBOX_BASE_URL` at the running
    Voicebox dev server.
-2. `curl http://localhost:8080/api/voices/voicebox/status` → expect
+2. `curl http://localhost:8765/api/voices/voicebox/status` → expect
    `reachable: true`.
 3. Create a new voice via the UI with a reference audio file. Confirm:
    - `voices.voicebox_profile_id` is populated (check SQLite directly).
