@@ -230,6 +230,59 @@ export interface AttributeAllResponse {
   skipped_chapter_ids: string[];
 }
 
+// --- Pronunciations (§9.6, Phase 5) ----------------------------------------
+
+export type PronunciationCategory =
+  | "character_name"
+  | "place"
+  | "proper_noun"
+  | "phrase"
+  | "other";
+
+export interface Pronunciation {
+  id: string;
+  project_id: string | null; // null for global
+  term: string;
+  phonetic: string;
+  ipa: string | null;
+  confidence: number | null;
+  category: PronunciationCategory | null;
+  notes: string | null;
+  source: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PronunciationCreate {
+  term: string;
+  phonetic: string;
+  ipa?: string | null;
+  confidence?: number | null;
+  category?: PronunciationCategory | null;
+  notes?: string | null;
+  source?: string | null;
+}
+
+export type PronunciationUpdate = Partial<PronunciationCreate>;
+
+export interface MergedPronunciationEntry {
+  term: string;
+  phonetic: string;
+  ipa: string | null;
+  confidence: number | null;
+  source: "global" | "project";
+  origin_id: string;
+}
+
+export interface PronunciationExtractResult {
+  job_id: string;
+  request_path: string;
+  book_text_chars: number;
+  truncated: boolean;
+  cast_size: number;
+  warnings: string[];
+}
+
 // --- Voice library (§7.2) ---------------------------------------------------
 
 export interface Voice {
@@ -470,5 +523,78 @@ export const api = {
     request<AttributeAllResponse>(
       `/api/projects/${projectIdOrSlug}/attribute-all`,
       { method: "POST" },
+    ),
+
+  // ---- Pronunciations (Phase 5) ----
+
+  listGlobalPronunciations: () =>
+    request<Pronunciation[]>("/api/pronunciations/global"),
+
+  createGlobalPronunciation: (body: PronunciationCreate) =>
+    request<Pronunciation>("/api/pronunciations/global", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  updateGlobalPronunciation: (id: string, body: PronunciationUpdate) =>
+    request<Pronunciation>(`/api/pronunciations/global/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  deleteGlobalPronunciation: (id: string) =>
+    request<void>(`/api/pronunciations/global/${id}`, { method: "DELETE" }),
+
+  listProjectPronunciations: (projectIdOrSlug: string) =>
+    request<Pronunciation[]>(
+      `/api/projects/${projectIdOrSlug}/pronunciations`,
+    ),
+
+  createProjectPronunciation: (
+    projectIdOrSlug: string,
+    body: PronunciationCreate,
+  ) =>
+    request<Pronunciation>(
+      `/api/projects/${projectIdOrSlug}/pronunciations`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+
+  updatePronunciation: (id: string, body: PronunciationUpdate) =>
+    request<Pronunciation>(`/api/pronunciations/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  deletePronunciation: (id: string) =>
+    request<void>(`/api/pronunciations/${id}`, { method: "DELETE" }),
+
+  promotePronunciationToGlobal: (
+    id: string,
+    opts: { deleteProjectEntry?: boolean } = {},
+  ) =>
+    request<Pronunciation>(`/api/pronunciations/${id}/promote-to-global`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        delete_project_entry: opts.deleteProjectEntry ?? true,
+      }),
+    }),
+
+  extractPronunciations: (projectIdOrSlug: string) =>
+    request<PronunciationExtractResult>(
+      `/api/projects/${projectIdOrSlug}/pronunciations/extract`,
+      { method: "POST" },
+    ),
+
+  listMergedPronunciations: (projectIdOrSlug: string) =>
+    request<MergedPronunciationEntry[]>(
+      `/api/projects/${projectIdOrSlug}/pronunciations/merged`,
     ),
 };

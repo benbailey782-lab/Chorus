@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 import { api } from "../lib/api";
 
@@ -59,6 +60,22 @@ export default function Settings() {
           Voicebox is configured via the <code className="font-mono">VOICEBOX_ENABLED</code>{" "}
           and <code className="font-mono">VOICEBOX_BASE_URL</code> env vars. Restart the
           backend after changing either.
+        </p>
+      </section>
+
+      <section className="card p-4 space-y-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-lg font-display">Pronunciations (Global)</h2>
+          <Link
+            to="/settings/pronunciations"
+            className="btn-surface text-xs"
+          >
+            Open
+          </Link>
+        </div>
+        <p className="text-sm text-muted">
+          Shared pronunciation overrides applied to every project. Project-
+          scoped entries take precedence at generation time.
         </p>
       </section>
 

@@ -369,6 +369,33 @@ class PronunciationOut(PronunciationBase):
     updated_at: str
 
 
+class MergedPronunciationOut(BaseModel):
+    """Phase 5 — what the generation pipeline will actually read.
+
+    Unions project + global entries with project wins. Keyed case-insensitively
+    in the helper; this DTO preserves the stored ``term`` casing for display.
+    """
+    term: str
+    phonetic: str
+    ipa: Optional[str] = None
+    confidence: Optional[float] = None
+    source: Literal["global", "project"]
+    origin_id: str
+
+
+class PromoteToGlobalRequest(BaseModel):
+    delete_project_entry: bool = True
+
+
+class PronunciationExtractResponse(BaseModel):
+    job_id: str
+    request_path: str
+    book_text_chars: int
+    truncated: bool
+    cast_size: int
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ChapterMeta(BaseModel):
     """GET /api/chapters/{id} — metadata shape for the review UI toolbar.
 

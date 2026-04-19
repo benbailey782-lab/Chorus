@@ -156,6 +156,12 @@ export default function Casting() {
             Ingest a source file on the <Link to={`/project/${idOrSlug}`} className="text-accent underline">project page</Link> before extracting the cast.
           </span>
         )}
+        <Link
+          to={`/project/${idOrSlug}/pronunciations`}
+          className="btn-surface text-sm"
+        >
+          Pronunciations
+        </Link>
       </div>
 
       {/* Main layout ------------------------------------------------- */}
