@@ -33,8 +33,16 @@ export default function Layout() {
   return (
     <div className="min-h-full flex flex-col">
       {/* Header is compact on mobile so the useful stuff is above the fold
-          at 375px. Nav is at the bottom on mobile, inline here on ≥md. */}
-      <header className="sticky top-0 z-10 border-b border-border bg-bg/90 backdrop-blur">
+          at 375px. Nav is at the bottom on mobile, inline here on ≥md.
+          Phase 6.6 commit 3: on /play/:id mobile we hide the global
+          "Chorus" brand row entirely — the player route renders its own
+          44px compressed header. Desktop (≥md) keeps the brand row since
+          it hosts the inline nav. */}
+      <header
+        className={`sticky top-0 z-10 border-b border-border bg-bg/90 backdrop-blur ${
+          onFullPlayer ? "hidden md:block" : ""
+        }`}
+      >
         <div
           className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3"
           style={{ paddingTop: "calc(0.75rem + env(safe-area-inset-top, 0px))" }}
@@ -52,13 +60,28 @@ export default function Layout() {
       </header>
 
       <main
-        className="flex-1 max-w-5xl w-full mx-auto px-4 py-4 md:py-6"
+        className={
+          onFullPlayer
+            ? // Mobile player owns its own padding + flush-to-BottomNav
+              // layout. On mobile, we zero out the wrapper's px/py so the
+              // 44px header + card + transport can stretch edge-to-edge
+              // and sit flush above the BottomNav. Desktop keeps the
+              // standard gutter since the 3-column desktop player fits
+              // inside the max-w-5xl content area.
+              "flex-1 max-w-5xl w-full mx-auto px-0 py-0 md:px-4 md:py-6"
+            : "flex-1 max-w-5xl w-full mx-auto px-4 py-4 md:py-6"
+        }
         style={{
           // MiniPlayer is now a floating card (absolutely positioned) so
           // main content only needs to reserve BottomNav space (4rem) plus
           // iOS home-indicator inset. Phase-6.5 commit 3.
-          paddingBottom:
-            "calc(4rem + env(safe-area-inset-bottom, 0px))",
+          // On /play/:id the mobile Player.tsx manages its own bottom-nav
+          // clearance via a flex column sized to viewport, so we drop the
+          // wrapper's pb entirely on mobile (desktop still wants the gap
+          // to keep the main column clear of the inline BottomNav).
+          paddingBottom: onFullPlayer
+            ? undefined
+            : "calc(4rem + env(safe-area-inset-bottom, 0px))",
         }}
       >
         <Outlet />

@@ -31,8 +31,14 @@ export default function TransportControls({ chapters, compact = false }: Props) 
   const isError = status === "error";
   const isFinished = status === "finished";
 
-  const playPauseSize = compact ? "h-16 w-16" : "h-14 w-14";
-  const skipSize = compact ? "h-12 w-12" : "h-11 w-11";
+  // Phase 6.6 commit 3: compact mobile sizes tightened per spec.
+  //   - Play/pause: 60×60 (down from 64) — still largest, less dominant.
+  //   - Skip-chapter (prev/next): 40×40 (down from ~64).
+  //   - Skip-15s: 36×36 (down from ~56). Below the 44px tap-target guideline
+  //     but matches iOS secondary-control defaults.
+  const playPauseSize = compact ? "h-[60px] w-[60px]" : "h-14 w-14";
+  const chapterSkipSize = compact ? "h-10 w-10" : "h-11 w-11";
+  const skip15Size = compact ? "h-9 w-9" : "h-11 w-11";
 
   function togglePlay() {
     if (isPlaying) playerController.pause();
@@ -79,13 +85,20 @@ export default function TransportControls({ chapters, compact = false }: Props) 
     );
   }
 
+  // Compact mode uses `justify-between` so the row spans the full
+  // container width on mobile (narrow iPhone 375px). Desktop stays
+  // centered with a tight gap.
+  const rowClass = compact
+    ? "flex items-center justify-between w-full px-1"
+    : "flex items-center justify-center gap-3";
+
   return (
-    <div className="flex items-center justify-center gap-3">
+    <div className={rowClass}>
       <IconButton
         label="Previous chapter"
         onClick={() => void playerController.previous(chapters)}
         disabled={atFirst}
-        size={skipSize}
+        size={chapterSkipSize}
       >
         <PrevIcon />
       </IconButton>
@@ -93,7 +106,7 @@ export default function TransportControls({ chapters, compact = false }: Props) 
       <IconButton
         label="Skip back 15 seconds"
         onClick={() => playerController.skip(-15)}
-        size={skipSize}
+        size={skip15Size}
       >
         <SkipBackIcon />
       </IconButton>
@@ -119,7 +132,7 @@ export default function TransportControls({ chapters, compact = false }: Props) 
       <IconButton
         label="Skip forward 15 seconds"
         onClick={() => playerController.skip(15)}
-        size={skipSize}
+        size={skip15Size}
       >
         <SkipForwardIcon />
       </IconButton>
@@ -128,7 +141,7 @@ export default function TransportControls({ chapters, compact = false }: Props) 
         label="Next chapter"
         onClick={() => void playerController.next(chapters)}
         disabled={atLast}
-        size={skipSize}
+        size={chapterSkipSize}
       >
         <NextIcon />
       </IconButton>

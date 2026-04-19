@@ -12,13 +12,14 @@
  * (Commit 6) mini-player stays live.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import ChapterList from "../components/player/ChapterList";
 import CoverArt from "../components/player/CoverArt";
 import IncompleteChapterDialog from "../components/player/IncompleteChapterDialog";
+import MobileControlsSheet from "../components/player/MobileControlsSheet";
 import MobilePlayerCard from "../components/player/MobilePlayerCard";
 import Scrubber from "../components/player/Scrubber";
 import SpeedControl from "../components/player/SpeedControl";
@@ -355,6 +356,7 @@ export default function Player() {
       chapterTitle={currentChapter?.title ?? undefined}
       chapters={chapters}
       idOrSlug={idOrSlug}
+      currentChapterId={storeChapterId}
       autoAdvance={autoAdvance}
       onToggleAutoAdvance={setAutoAdvance}
       status={status}
@@ -389,12 +391,36 @@ export default function Player() {
 import type { Chapter } from "../lib/api";
 import type { PlayerStatus } from "../stores/playerStore";
 
+/**
+ * MobilePlayerLayout — Phase 6.6 commit 3.
+ *
+ * Target viewport: 375×812 (iPhone). Fits exactly:
+ *   - 44px compressed header (back / title / overflow)
+ *   - 520px flip card (cover ↔ transcript)
+ *   - ~100px transport row (scrubber + 5-button cluster)
+ *   - ~60px swipe-up indicator + breathing room
+ *   - 88px BottomNav (fixed, outside this flex tree)
+ *
+ * The outer `<div>` pins itself to the viewport height minus the BottomNav
+ * so the transport row ends FLUSH above the nav, no dead gap. The BottomNav
+ * is `fixed bottom-0` inside Layout.tsx; we reserve its ~88px space via
+ * `calc(100dvh - 88px - safe-area-inset-bottom)`.
+ *
+ * The "View full transcript" link from Phase 6.5 is dropped here to make
+ * the 812px math work; users still reach the transcript by flipping the
+ * card (tap to flip, per Phase 6.5 commit 4).
+ *
+ * Settings cog is also dropped — auto-advance moves into the swipe-up
+ * MobileControlsSheet, accessible via the overflow-menu button in the
+ * header OR the swipe-up indicator pill below the transport controls.
+ */
 function MobilePlayerLayout({
   projectTitle,
   chapterNumber,
   chapterTitle,
   chapters,
   idOrSlug,
+  currentChapterId,
   autoAdvance,
   onToggleAutoAdvance,
   status,
@@ -408,6 +434,7 @@ function MobilePlayerLayout({
   chapterTitle: string | undefined;
   chapters: Chapter[];
   idOrSlug: string;
+  currentChapterId: string | null;
   autoAdvance: boolean;
   onToggleAutoAdvance: (on: boolean) => void;
   status: PlayerStatus;
@@ -416,8 +443,7 @@ function MobilePlayerLayout({
   restoredPositionMs: number | null;
   missingDialog: React.ReactNode;
 }) {
-  const [transcriptOpen, setTranscriptOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   const segmentTimings = usePlayerStore((s) => s.segmentTimings);
   const currentSegmentId = usePlayerStore((s) => s.currentSegmentId);
@@ -435,163 +461,156 @@ function MobilePlayerLayout({
     };
   }, [storeChapterId, chapterNumber, chapterTitle]);
 
+  // Swipe-up gesture on the indicator pill → open the controls sheet. Very
+  // small threshold (30px) so the gesture feels responsive. Tap also works
+  // via the button onClick handler.
+  const indicatorDragStart = useRef<number | null>(null);
+  function onIndicatorPointerDown(e: React.PointerEvent) {
+    indicatorDragStart.current = e.clientY;
+  }
+  function onIndicatorPointerMove(e: React.PointerEvent) {
+    if (indicatorDragStart.current === null) return;
+    const dy = e.clientY - indicatorDragStart.current;
+    if (dy < -30) {
+      indicatorDragStart.current = null;
+      setControlsOpen(true);
+    }
+  }
+  function onIndicatorPointerEnd() {
+    indicatorDragStart.current = null;
+  }
+
+  // Chapter title shown in the center of the 44px header. Prefer the full
+  // chapter title; fall back to "Ch. N" when unavailable.
+  const headerTitle =
+    chapterTitle ??
+    (chapterNumber !== undefined ? `Chapter ${chapterNumber}` : projectTitle);
+
   return (
-    <div className="flex flex-col gap-3 pb-40">
-      <header className="flex items-center gap-3 h-12">
+    <div
+      className="flex flex-col"
+      style={{
+        // 100dvh accounts for mobile browser chrome better than 100vh.
+        // Subtract the BottomNav (~4rem visual + safe-area-inset-bottom)
+        // so the player's last row sits flush against the nav.
+        height:
+          "calc(100dvh - 4rem - env(safe-area-inset-bottom, 0px))",
+      }}
+    >
+      {/* 44px compressed header — back / chapter title / overflow. */}
+      <header
+        className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-border"
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+      >
         <Link
           to="/player"
-          className="text-sm text-muted hover:text-fg shrink-0"
+          className="h-8 w-8 shrink-0 grid place-items-center rounded-full
+                     text-muted hover:text-fg hover:bg-surface-2"
           aria-label="Back to player tab"
         >
-          ←
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
         </Link>
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] uppercase tracking-wider text-muted truncate">
-            {projectTitle}
-          </div>
-          <div className="text-base truncate">
-            {chapterNumber !== undefined && `Ch. ${chapterNumber}`}
-            {chapterTitle && (
-              <span className="text-muted"> · {chapterTitle}</span>
-            )}
-          </div>
+        <div className="min-w-0 flex-1 text-center">
+          <div className="text-base font-medium truncate">{headerTitle}</div>
         </div>
+        <button
+          type="button"
+          onClick={() => setControlsOpen(true)}
+          aria-label="More player controls"
+          className="h-8 w-8 shrink-0 grid place-items-center rounded-full
+                     text-muted hover:text-fg hover:bg-surface-2"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <circle cx="5" cy="12" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="19" cy="12" r="1.7" />
+          </svg>
+        </button>
       </header>
 
-      {/* Flip card: tap to toggle cover <-> transcript. */}
-      <div className="w-full max-h-[55vh] aspect-square mx-auto my-1">
-        <MobilePlayerCard
-          chapter={cardChapter}
-          segmentTimings={segmentTimings}
-          currentSegmentId={currentSegmentId}
-          onSegmentSeek={(ms) => playerController.seek(ms)}
-          projectTitle={projectTitle}
+      {/* Flip card fills available space between header and transport row.
+          max-h keeps it ~520px on an iPhone viewport; on shorter viewports
+          the flex-1 lets it shrink. aspect-square is dropped so the card
+          can grow/shrink with the flex column rather than over-constraining
+          the layout. The card itself still renders a centered square image
+          via its internal wrapper. */}
+      <div className="flex-1 min-h-0 px-4 pt-3 pb-2 overflow-hidden">
+        <div className="w-full h-full max-h-[520px] mx-auto">
+          <MobilePlayerCard
+            chapter={cardChapter}
+            segmentTimings={segmentTimings}
+            currentSegmentId={currentSegmentId}
+            onSegmentSeek={(ms) => playerController.seek(ms)}
+            projectTitle={projectTitle}
+          />
+        </div>
+      </div>
+
+      {/* Assembly progress sits above the transport row when active. */}
+      <div className="px-4">
+        <AssemblyProgressBar
+          status={status}
+          progress={assemblyProgress}
+          error={assemblyError}
         />
       </div>
 
-      <div className="flex justify-center">
-        <button
-          type="button"
-          onClick={() => setTranscriptOpen(true)}
-          className="text-xs text-muted hover:text-fg underline underline-offset-2"
-        >
-          View full transcript
-        </button>
-      </div>
-
-      <AssemblyProgressBar
-        status={status}
-        progress={assemblyProgress}
-        error={assemblyError}
-      />
-
-      {/* Fixed bottom transport area — within thumb reach. */}
-      <div
-        className="fixed inset-x-0 bottom-[4.5rem] z-20 bg-bg/95 backdrop-blur
-                   border-t border-border px-4 pt-3 pb-4 space-y-3"
-        style={{
-          paddingBottom: "calc(1rem + env(safe-area-inset-bottom, 0px))",
-        }}
-      >
+      {/* Transport row: scrubber + 5-button cluster with inline speed pill.
+          Flush above the swipe-up indicator; no fixed positioning. */}
+      <div className="shrink-0 px-4 pt-1 pb-1 space-y-2">
         <ResumeHint restoredPositionMs={restoredPositionMs} status={status} />
         <Scrubber />
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <TransportControls chapters={chapters} compact />
+          </div>
           <SpeedControl compact />
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Player settings"
-            className="chip min-h-tap text-xs"
-          >
-            ⚙︎
-          </button>
         </div>
-        <TransportControls chapters={chapters} compact />
       </div>
 
-      {/* Transcript bottom sheet */}
-      {transcriptOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Transcript"
-          className="fixed inset-0 z-40 bg-bg/80 backdrop-blur flex items-end"
-          onClick={() => setTranscriptOpen(false)}
-        >
-          <div
-            className="bg-bg border-t border-border rounded-t-card h-[80vh] w-full flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-center py-2 shrink-0">
-              <span
-                aria-hidden="true"
-                className="block h-1 w-10 rounded-full bg-border"
-              />
-            </div>
-            <div className="flex items-center justify-between px-4 pb-2 shrink-0">
-              <div className="text-xs uppercase tracking-wider text-muted">
-                Transcript
-              </div>
-              <button
-                type="button"
-                onClick={() => setTranscriptOpen(false)}
-                className="text-sm text-muted hover:text-fg"
-              >
-                Done
-              </button>
-            </div>
-            <div className="flex-1 min-h-0">
-              <SyncedTextView
-                timings={segmentTimings}
-                currentSegmentId={currentSegmentId}
-                onSeek={(ms) => playerController.seek(ms)}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Swipe-up indicator — tappable pill + swipe-up gesture opens the
+          MobileControlsSheet. ~40px wide, 3px tall, opacity-30. */}
+      <div className="shrink-0 pt-3 pb-4 flex justify-center">
+        <button
+          type="button"
+          onClick={() => setControlsOpen(true)}
+          onPointerDown={onIndicatorPointerDown}
+          onPointerMove={onIndicatorPointerMove}
+          onPointerUp={onIndicatorPointerEnd}
+          onPointerCancel={onIndicatorPointerEnd}
+          aria-label="Open player controls"
+          className="h-[3px] w-10 rounded-full bg-fg opacity-30
+                     hover:opacity-60 transition-opacity touch-none"
+        />
+      </div>
 
-      {/* Settings bottom sheet */}
-      {settingsOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Player settings"
-          className="fixed inset-0 z-40 bg-bg/80 backdrop-blur flex items-end"
-          onClick={() => setSettingsOpen(false)}
-        >
-          <div
-            className="bg-bg border-t border-border rounded-t-card w-full p-5 space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-center">
-              <span
-                aria-hidden="true"
-                className="block h-1 w-10 rounded-full bg-border"
-              />
-            </div>
-            <div className="font-display text-lg">Player settings</div>
-            <AutoAdvanceToggle
-              value={autoAdvance}
-              onChange={onToggleAutoAdvance}
-            />
-            <div className="text-xs text-muted">
-              Chapters from {projectTitle} · tap{" "}
-              <Link to={`/project/${idOrSlug}/cast`} className="underline">
-                cast
-              </Link>{" "}
-              to manage characters.
-            </div>
-            <button
-              type="button"
-              className="btn-surface w-full"
-              onClick={() => setSettingsOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      <MobileControlsSheet
+        open={controlsOpen}
+        onClose={() => setControlsOpen(false)}
+        autoAdvance={autoAdvance}
+        onToggleAutoAdvance={onToggleAutoAdvance}
+        chapters={chapters}
+        currentChapterId={currentChapterId}
+        projectIdOrSlug={idOrSlug}
+      />
 
       {missingDialog}
     </div>
