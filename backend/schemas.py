@@ -508,15 +508,20 @@ class AssemblyStatusOut(BaseModel):
 
 
 class SegmentTimingOut(BaseModel):
-    """Per-segment timing row in the assembly timeline. ``text_preview`` is
-    truncated to ~80 chars so the player can render a scrub tooltip without
-    pulling full segment bodies."""
+    """Per-segment timing row in the assembly timeline.
+
+    ``text`` is the full segment body — the player's synced-transcript view
+    renders the whole thing so users can read along.
+
+    ``text_preview`` stays truncated to ~80 chars for UIs that want a scrub
+    tooltip or a compact review-table column without pulling full bodies."""
     segment_id: str
     order_index: int
     start_ms: int
     end_ms: int
     duration_ms: int
     speaker_name: Optional[str] = None
+    text: str
     text_preview: str
 
 

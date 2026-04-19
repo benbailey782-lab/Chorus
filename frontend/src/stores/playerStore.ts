@@ -14,7 +14,7 @@
 
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import type { Chapter, SegmentTiming } from "../lib/api";
+import type { ChapterMeta, SegmentTiming } from "../lib/api";
 
 export type PlayerStatus =
   | "idle"
@@ -29,7 +29,7 @@ export interface PlayerState {
   // Identity
   projectIdOrSlug: string | null;
   chapterId: string | null;
-  chapter: Chapter | null;
+  chapter: ChapterMeta | null;
   segmentTimings: SegmentTiming[];
 
   // Playback
@@ -63,7 +63,7 @@ export interface PlayerState {
   loadProject: (idOrSlug: string) => void;
   loadChapter: (
     chapterId: string,
-    chapter: Chapter,
+    chapter: ChapterMeta,
     timings: SegmentTiming[],
   ) => void;
   reset: () => void;

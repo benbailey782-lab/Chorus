@@ -15,7 +15,7 @@
  * Not elegant but keeps the controller singleton-simple.
  */
 
-import { api, type Chapter, type SegmentTiming } from "./api";
+import { api, type Chapter, type ChapterMeta, type SegmentTiming } from "./api";
 import { usePlayerStore } from "../stores/playerStore";
 
 class PlayerController {
@@ -65,10 +65,13 @@ class PlayerController {
 
   async loadChapter(projectIdOrSlug: string, chapterId: string): Promise<void> {
     const set = usePlayerStore.setState;
-    // 1. Store project + clear per-load state.
+    // 1. Store project + clear per-load state. `chapter` is wiped here so the
+    //    MiniPlayer doesn't show a stale title from the previous chapter while
+    //    the metadata fetch below is in flight.
     set({
       projectIdOrSlug,
       chapterId,
+      chapter: null,
       status: "loading",
       positionMs: 0,
       durationMs: 0,
@@ -78,6 +81,11 @@ class PlayerController {
       assemblyError: null,
       missingSegments: [],
     });
+
+    // 1a. Fetch chapter metadata so the MiniPlayer / full player can render a
+    //     real title ("Chapter 3 — Bran") instead of "Loading…". Non-fatal if
+    //     it fails — UI falls back to "Chapter N" or a generic placeholder.
+    void this.fetchChapterMeta(chapterId);
 
     // 2. Try to restore the user's last position — but only if the saved
     //    row points at THIS chapter. Users switching chapters should not
@@ -135,6 +143,19 @@ class PlayerController {
         audio.removeEventListener("loadedmetadata", onReady);
       };
       audio.addEventListener("loadedmetadata", onReady);
+    }
+  }
+
+  private async fetchChapterMeta(chapterId: string): Promise<void> {
+    try {
+      const meta: ChapterMeta = await api.getChapter(chapterId);
+      // Guard against late resolution clobbering a subsequent loadChapter:
+      // only apply if the store still points at this chapter id.
+      if (usePlayerStore.getState().chapterId === chapterId) {
+        usePlayerStore.setState({ chapter: meta });
+      }
+    } catch {
+      /* non-fatal — MiniPlayer falls back to "Chapter N" */
     }
   }
 

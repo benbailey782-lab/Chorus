@@ -259,6 +259,9 @@ export interface SegmentTiming {
   end_ms: number;
   duration_ms: number;
   speaker_name: string | null;
+  /** Full segment body — used by the player's synced transcript. */
+  text: string;
+  /** ~80-char preview with ellipsis — used by scrub tooltips / compact lists. */
   text_preview: string;
 }
 

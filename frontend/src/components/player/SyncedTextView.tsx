@@ -95,7 +95,7 @@ export default function SyncedTextView({
                           }`}
             >
               <div className="flex gap-3 items-baseline">
-                <p className="flex-1 whitespace-pre-wrap">{t.text_preview}</p>
+                <p className="flex-1 whitespace-pre-wrap">{t.text}</p>
                 <span className="text-[10px] text-muted tabular-nums shrink-0">
                   {durationSec}s
                 </span>

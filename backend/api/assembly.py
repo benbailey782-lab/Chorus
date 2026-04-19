@@ -299,6 +299,7 @@ def segment_timings(chapter_id: str) -> list[SegmentTimingOut]:
         start_ms = cursor_ms
         end_ms = start_ms + dur
         cursor_ms = end_ms
+        full_text = r["text"] or ""
         out.append(
             SegmentTimingOut(
                 segment_id=r["id"],
@@ -307,7 +308,8 @@ def segment_timings(chapter_id: str) -> list[SegmentTimingOut]:
                 end_ms=end_ms,
                 duration_ms=dur,
                 speaker_name=r["speaker_name"],
-                text_preview=_truncate_preview(r["text"] or ""),
+                text=full_text,
+                text_preview=_truncate_preview(full_text),
             )
         )
     return out
