@@ -27,6 +27,7 @@ data/
 *.wav
 segments/
 output/
+*.tsbuildinfo
 
 # User-supplied content
 ambient/*.mp3
