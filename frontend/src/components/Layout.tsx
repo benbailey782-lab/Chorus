@@ -54,15 +54,18 @@ export default function Layout() {
       <main
         className="flex-1 max-w-5xl w-full mx-auto px-4 py-4 md:py-6"
         style={{
-          // Leave room for the bottom nav (mobile) + mini-player strip.
+          // MiniPlayer is now a floating card (absolutely positioned) so
+          // main content only needs to reserve BottomNav space (4rem) plus
+          // iOS home-indicator inset. Phase-6.5 commit 3.
           paddingBottom:
-            "calc(5rem + 80px + env(safe-area-inset-bottom, 0px))",
+            "calc(4rem + env(safe-area-inset-bottom, 0px))",
         }}
       >
         <Outlet />
       </main>
 
-      {/* Persistent surfaces. Mini-player sits ABOVE the BottomNav. */}
+      {/* Persistent surfaces. MiniPlayer floats above everything; BottomNav
+          sits at the bottom of the viewport on mobile. */}
       {!onFullPlayer && <MiniPlayer />}
 
       {/* Mobile bottom nav — hidden on ≥md where it lives in the header. */}
