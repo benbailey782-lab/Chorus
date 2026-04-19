@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import ChaptersSection from "../components/casting/ChaptersSection";
 import PendingJobsBanner from "../components/PendingJobsBanner";
 import {
   api,
@@ -182,6 +183,9 @@ export default function Casting() {
           />
         </div>
       )}
+
+      {/* Chapters section ------------------------------------------- */}
+      <ChaptersSection projectIdOrSlug={idOrSlug} projectId={p.id} />
 
       {/* Extract-cast modal ----------------------------------------- */}
       {extractModalOpen && (
