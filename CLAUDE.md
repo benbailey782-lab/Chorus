@@ -15,6 +15,7 @@
 - Phase 1 (Ingestion + Library) — TXT + EPUB ingestion, naive chapter detection, Library + Project views. Claude chapter-detection fallback not yet wired.
 - Phase 2 (Voice Library) — **done in Voicebox-stub mode** (dev is on Windows, no Voicebox installed). Full CRUD + metadata + optional reference-audio upload + mobile-first dark UI at §15.8 tokens. Voicebox wiring punch-list: `docs/VOICEBOX-WIRING.md`.
 - Phase 3 (Cast Extraction + Auto-Casting) — **done via file-drop LLM integration (§12A)**. No Anthropic SDK calls; prompts written to `data/llm_queue/pending/`, responses read from `data/llm_queue/responses/`. Jobs worker reconciles them. Operator playbook: `docs/FILE-DROP-WORKFLOW.md`.
+- Phase 4 (Per-Chapter Attribution) — **backend + API complete** (schema v4, `attribute_chapter` handler, `POST /api/chapters/{id}/attribute`, `POST /api/projects/{id}/attribute-all`, `GET /api/chapters/{id}/segments`, `PATCH /api/segments/{id}`, `POST /api/segments/bulk-reassign`, `GET /api/segments/{id}/preview` → 501). **Review UI deferred** — resume at P5 (prose view) next session; see `scratch/instructions.txt` for the resume marker. Round-trip validated against AGoT BRAN via file-drop: 217 segments, mean confidence 96.9, project → `attributed`.
 - Later phases per spec §17.
 
 ## Conventions
@@ -82,6 +83,21 @@ Extract AGoT cast via file-drop LLM integration, auto-cast from voice library, m
 5. Within seconds, the cast list populates; project status flips to `casting`.
 6. Click "Run Auto-Cast" → a second request file lands; the companion session responds; each character card shows its assigned voice.
 7. Click any character → pick a different voice from the right pane to verify manual override.
+
+## Phase-4 exit criterion
+
+Run attribution pass on AGoT book 1 chapter-by-chapter via file-drop; manually inspect a handful of chapters for quality; per-chapter review UI allows inline editing and bulk reassignment.
+
+### Phase-4 backend conventions
+
+- **`jobs.kind = "attribute_chapter"`** for per-chapter attribution jobs. Handler registered in `backend/nlp/attribute_chapter.py`; imported in `backend/main.py` so `@register_handler` fires before the worker starts.
+- **File-drop worker poll is now 1s** (was 2s) — tightens round-trip latency. Companion Claude Code session cadence recommendation is 3s in `docs/FILE-DROP-WORKFLOW.md`.
+- **Chapter-split regex** requires empty-string lines on both sides of a bare Roman-numeral heading; suppresses all bare-Romans when the doc has >100 such candidates; suppresses lone `I`/`V` when lowercase prose sits within 200 chars. Pre-Phase-4 projects with inflated `chapter_count` should be re-ingested (delete + re-upload source).
+- **Segments schema**: v4 rebuild. `render_mode` CHECK enforces the full §6 nine-value vocabulary. `character_id` uses `ON DELETE SET NULL` so orphaned segments survive character deletion.
+- **Project status transitions** on attribution:
+  - `casting` → `attributing` when the first `attribute_chapter` job for the project hits `awaiting_response`
+  - `attributing` → `attributed` when every chapter has at least one segment AND `chapter_count > 0`
+- **`line_count` on characters** is recomputed after every successful attribute_chapter ingestion. The formula is "count of dialogue-mode segments assigned to this character across the whole project."
 
 ### Phase-3 conventions
 
