@@ -158,6 +158,60 @@ Conventions added:
 - **Toast system**: minimal custom toast in `frontend/src/lib/toast.ts` + `frontend/src/components/Toast.tsx`. Wrapped at app root. Import `useToast()` to emit. Do not add a third-party toast lib.
 - **Bulk operations** that can be expressed as a single `changes` payload (speaker, render_mode) use `POST /api/segments/bulk-reassign`. Add/remove emotion tags require per-segment PATCHes because the bulk endpoint applies the same `changes` to every selected segment (would overwrite per-segment tag lists).
 
+### Phase 5 Remediation (v8 schema, real Voicebox API)
+
+Phase 5 originally shipped against a stubbed Voicebox assumption. Voicebox v0.4.0
+is now live at localhost:<port>. Seven commits re-aligned Chorus with the real
+API, added engine selection, paralinguistic tag mapping, and a config/ops UI.
+
+1. `phase5r-schema` — v8 migration: `voices.voicebox_engine` (7-value CHECK on fresh DBs),
+   `voices.voicebox_effect_preset_id` (nullable, Phase 7 UI), `segments.voicebox_generation_id`
+   (nullable), new `voice_samples` table with backfill from existing voices.
+2. `phase5r-config` — Voicebox URL default now empty (unconfigured). New persistence
+   layer `data/voicebox_config.json` with `voicebox_config_store.get_effective()` read
+   per request. New `POST /api/voicebox/test-connection`. Settings UI `Voicebox` section
+   with URL input, Test, Save, Enable toggle.
+3. `phase5r-client` — full rewrite of `backend/voices/voicebox_client.py` against
+   verified Voicebox v0.4.0 API. 19 functions covering models, profiles, samples,
+   generation. Three high-level wrappers: `generate_and_wait`, `regenerate_and_wait`,
+   `retry_and_wait`. Exception hierarchy rationalized; legacy aliases retained for
+   Phase 5 call sites.
+4. `phase5r-generation` — pipeline wired through `generate_and_wait`. Paralinguistic
+   tag mapping in `backend/audio/paralinguistic.py` (chatterbox-turbo only). Lazy
+   model loading via `backend/audio/model_loader.py::ensure_model_loaded` with
+   in-process cache + per-model asyncio.Lock. New `POST /api/segments/{id}/retry`
+   endpoint for user-initiated retry.
+5. `phase5r-voice-engine-ui` — VoiceEditor dropdown for engine (7 options, default
+   qwen3-tts). VoiceLibrary card shows engine chip + "Needs sync" badge when
+   `voicebox_profile_id IS NULL`. Eager backend profile creation on voice save.
+   `POST /api/voices/{id}/sync-to-voicebox` for reconciliation.
+6. `phase5r-generation-ui` — Global `ModelLoadingBanner` via `modelLoadingStore`
+   (Zustand). VoiceboxStatusBanner updated to reflect real health state (loaded
+   model, GPU availability). DetailPanel shows truncated `voicebox_generation_id`
+   for debugging + Retry button for failed segments.
+7. `phase5r-docs` — this commit. Updated VOICEBOX-WIRING, GENERATION-GUIDE,
+   PHASE-5-REMEDIATION, CHORUS-SPEC. All TODO(voicebox-verify) markers removed.
+
+#### Phase 5 Remediation conventions
+
+- **Voice engine is per-voice**, not per-project or global. Default `qwen3-tts`.
+  Changing engine on an existing voice deletes + recreates its Voicebox profile
+  and requires regeneration of any existing audio.
+- **Paralinguistic tags** are ONLY applied for voices with `voicebox_engine='chatterbox-turbo'`.
+  Other engines pass text through unchanged; unmapped emotion_tags silently skip.
+- **Model loading** is lazy + idempotent. First generation per engine per backend
+  process triggers the load. Subsequent generations skip via in-memory cache.
+- **Voicebox config** changes (URL, enabled flag) take effect WITHOUT a backend
+  restart because `_get_effective()` re-reads the JSON file on every call.
+- **voicebox_generation_id** is the pointer Chorus stores per segment to Voicebox's
+  side. Regenerate routes through `/generate/{id}/regenerate` when non-null; retry
+  uses `/retry`.
+- **Needs-sync badge** appears on voice cards whose `voicebox_profile_id IS NULL`.
+  Fix via the Sync button (retries `create_profile` + `add_sample_to_profile`).
+- **Zustand stores ship under `frontend/src/stores/`**. Current stores: `playerStore`
+  (Phase 6), `modelLoadingStore` (Phase 5R). Follow this pattern for future cross-route
+  client state.
+
 ### Phase-3 conventions
 
 - **Job `kind` vs spec's `type`**: the v1 DB schema used `kind`. We keep it for compatibility and map in-code vocabulary: `extract_characters`, `auto_cast`, `attribute_chapter` (Phase 4), etc. Spec §9.8 calls the column `type` — treat the two names as synonymous.

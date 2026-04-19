@@ -438,6 +438,27 @@ All timestamps ISO 8601 UTC. All IDs are UUIDs.
 ### 9.4 `voices` (the voice library)
 See §7.2 schema; stored in SQL with JSON columns for arrays.
 
+**v8 additions (Phase 5R):**
+| Column | Type | Notes |
+|---|---|---|
+| voicebox_engine | TEXT | `NOT NULL DEFAULT 'qwen3-tts'`. CHECK on fresh DBs constrains to the 7-engine vocabulary in §12.3. |
+| voicebox_effect_preset_id | TEXT | Nullable. References a Voicebox-side effect preset id. Field plumbed; UI deferred to Phase 7. |
+
+#### `voice_samples` (new in v8)
+One row per audio sample attached to a voice. Migration backfills one row per existing voice from its `voices.sample_path`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PK |
+| voice_id | TEXT | FK to `voices(id)` `ON DELETE CASCADE`. |
+| sample_path | TEXT | Local path under `data/voice_library/samples/`. |
+| voicebox_sample_id | TEXT | Nullable; populated when synced with the Voicebox profile. |
+| label | TEXT | Optional human label (e.g. "Beheading scene"). |
+| duration_ms | INTEGER | |
+| created_at | TEXT | `NOT NULL DEFAULT CURRENT_TIMESTAMP` |
+
+Multi-sample management UI is deferred to Phase 7.
+
 ### 9.5 `segments`
 | Column | Type | Notes |
 |---|---|---|
@@ -453,9 +474,10 @@ See §7.2 schema; stored in SQL with JSON columns for arrays.
 | confidence | INTEGER | 0–100 |
 | audio_path | TEXT | |
 | duration_ms | INTEGER | |
-| status | TEXT | `pending`/`generated`/`approved`/`error` |
+| status | TEXT | `pending`/`generating`/`generated`/`approved`/`error` |
 | error_message | TEXT | |
 | generated_at | TEXT | |
+| voicebox_generation_id | TEXT | **v8.** Nullable. Pointer to the Voicebox-side generation. Drives `/generate/{id}/regenerate` and `/generate/{id}/retry` routing. |
 
 ### 9.6 `pronunciations`
 | Column | Type | Notes |
@@ -566,34 +588,36 @@ Ambient is on by default but trivially disabled per project. Some listeners hate
 ## 12. Voicebox Integration
 
 ### 12.1 Assumptions
-- Voicebox runs separately on the same Mac
-- Default URL `http://localhost:8090` (configurable via `VOICEBOX_BASE_URL`). The default port is `8090` rather than Voicebox's upstream `5173` to avoid collisions with Vite (`5173`) and the Chorus backend (`8765`) when all three run on one Mac. Users running Voicebox at its upstream default should set `VOICEBOX_BASE_URL=http://localhost:5173`.
-- Pre-flight check on Chorus startup: confirm Voicebox is reachable
-- Display clear error if not: "Chorus requires Voicebox running locally. Install from https://github.com/jamiepine/voicebox"
+- Voicebox runs locally on the same machine as the Chorus backend (Windows or Mac — v0.4.0 supports both).
+- URL is **runtime-assigned** by Voicebox (e.g. `localhost:17493`), not hardcoded. Operator pastes the URL into Settings → Voicebox; Chorus persists it to `data/voicebox_config.json` and reads it per-request (no restart on change).
+- Pre-flight check on Chorus startup: load config, surface state to UI; do not hard-fail when Voicebox is unreachable — UI degrades gracefully.
+- Display clear error if not configured: "Chorus requires Voicebox running locally. Install from https://github.com/jamiepine/voicebox".
 
-### 12.2 Expected Endpoints (to verify against real API before coding)
+### 12.2 API surface — see `docs/VOICEBOX-WIRING.md`
 
-| Purpose | Route | Notes |
-|---|---|---|
-| List profiles | `GET /api/profiles` | |
-| Create profile | `POST /api/profiles` | multipart |
-| Generate speech | `POST /api/generate` | `{text, profile_id, engine, effects?}` |
-| Check status | `GET /api/generations/{id}` | |
-| Download audio | `GET /api/generations/{id}/audio` | |
-
-**Pre-Phase-0 action:** Clone Voicebox, run `just dev`, hit its `/docs` endpoint, update this section with the real API surface.
+The authoritative integration reference is `docs/VOICEBOX-WIRING.md` (verified
+against Voicebox v0.4.0). It documents the full endpoint table, exception
+hierarchy, lazy model loading, paralinguistic tag mapping, engine→model
+mapping, troubleshooting, and the first-time setup flow. Earlier versions of
+this section listed speculative endpoint shapes; those have been retired in
+favor of the verified reference.
 
 ### 12.3 Engine Selection Strategy
 
+Engine is **per-voice**, picked by the operator at voice-creation time. Default `qwen3-tts`. Per-voice engine implies per-voice model load — see `docs/VOICEBOX-WIRING.md` for the lazy loader.
+
 | Engine | Primary Use |
 |---|---|
-| **Chatterbox Turbo** | Default — best paralinguistic tags, English |
-| **Qwen3-TTS** | Fallback / non-English passages / neutral delivery |
-| **HumeAI TADA** | Songs, highly emotional scenes |
-| **LuxTTS / Chatterbox Multilingual** | Language coverage edge cases |
+| `qwen3-tts` | General-purpose; default for new voices. |
+| `chatterbox-turbo` | Expressive speech with inline paralinguistic tag support (e.g. `[laugh]`, `[sigh]`, `[whisper]`). |
+| `chatterbox-multilingual` | Multi-language coverage. |
+| `luxtts` | Premium quality (engine docs). |
+| `humeai-tada` | 23 languages including Arabic, Hindi, Japanese, Swahili. |
+| `kokoro-82m` | Fast, lightweight; bulk Tier C voices. |
+| `qwen-custom-voice` | Voice cloning specialist. |
 
 ### 12.4 Concurrency
-Start at 2 parallel workers. Measure on real hardware before committing. Expose as a config setting.
+Start at 1 parallel worker (`voicebox_max_concurrent_generations = 1`). Measure on real hardware before bumping. Exposed as a config setting; gated by `asyncio.Semaphore(N)` in `backend/audio/generation.py`.
 
 ---
 
@@ -929,6 +953,8 @@ Each phase has a hard exit criterion. Do not advance until it's met.
 - SSE progress events
 
 **Exit:** Generate audio for one full AGoT chapter with full theatrical treatment. **Status: met for Windows dev** — UI is operable end-to-end; the generation path is fully built and disabled behind the `VOICEBOX_ENABLED` flag. Mac + live Voicebox validation (the "real" exit) is pending the first Mac run — the flip is env-only, no code changes. See `docs/GENERATION-GUIDE.md` and `docs/VOICEBOX-WIRING.md`.
+
+**Status: remediated in Phase 5R** — seven atomic commits (`6aa646d` … `phase5r-docs`, 2026-04-18) re-aligned the entire generation pipeline against the verified Voicebox v0.4.0 API. v8 schema migration adds `voices.voicebox_engine`, `voices.voicebox_effect_preset_id`, `segments.voicebox_generation_id`, and a new `voice_samples` table. `backend/voices/voicebox_client.py` was fully rewritten; lazy model loading + paralinguistic tag mapping + per-voice engine selection are all live. See `docs/PHASE-5-REMEDIATION.md` for the per-decision rundown and `CLAUDE.md` for per-commit notes.
 
 ### Phase 6 — Assembly + Ambient + Player (Days 14–16)
 - FFmpeg assembly pipeline

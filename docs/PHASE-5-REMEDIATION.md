@@ -224,15 +224,45 @@ Ben's Windows machine: CPU-only (no GPU detected at Voicebox install).
 
 ## Open questions for Phase 5 remediation session
 
-1. Should Chorus use Voicebox's Stories API for chapter assembly, or keep ffmpeg?
-2. Should Chorus adopt Voicebox's generation history, or keep its own segment state?
-3. How does Chorus map its "regenerate" action — Voicebox's `/retry` vs `/regenerate` vs create new generation?
-4. How should Chorus handle model loading on startup? (blocking wait, background load, on-demand)
-5. Should Chorus detect Voicebox's port automatically (check common config locations) or require manual config?
-6. Should voice profiles be created lazily (first time voice is used) or eagerly (when voice is added to library)?
+**Status: COMPLETE** — all decisions resolved across commits `6aa646d` …
+`91a32da` (see CLAUDE.md "Phase 5 Remediation" section for the per-commit
+rundown).
+
+1. **Chapter assembly.** *Resolved.* Kept ffmpeg approach; not migrating to
+   Stories API. Per-segment review flow preserved. (unchanged by this
+   remediation.)
+2. **Generation history.** *Resolved.* Added `voicebox_generation_id` column
+   to segments in v8 migration. See commit `6aa646d`.
+3. **Regenerate semantics.** *Resolved.* Regenerate uses
+   `POST /generate/{id}/regenerate` when prior generation id exists; retry
+   uses `/retry`. Commits `a815692` + `e5a4c05`.
+4. **Model loading.** *Resolved.* Lazy via
+   `backend/audio/model_loader.py::ensure_model_loaded`. Progress banner
+   via global Zustand store. Commits `e5a4c05` + `91a32da`.
+5. **Port discovery.** *Resolved.* Manual in Settings UI.
+   `voicebox_config.json` persistence layer. Commit `0227113`.
+6. **Voice profile creation.** *Resolved.* Eager. Backend uploads sample on
+   voice save. "Needs sync" badge + sync-to-voicebox endpoint for
+   reconciliation. Commit `91e6900`.
+7. **Engine selection.** *Resolved.* Per-voice. VoiceEditor dropdown;
+   VoiceLibrary badge. Default `qwen3-tts`. Commit `91e6900`.
+8. **Paralinguistic tags.** *Resolved.* Mapping layer in
+   `backend/audio/paralinguistic.py`. Only applies for `chatterbox-turbo`.
+   Commit `e5a4c05`.
+9. **Effect presets.** *Out of scope* for this remediation. Field plumbed
+   (nullable `voicebox_effect_preset_id`); UI deferred to Phase 7.
+10. **Multi-sample voices.** *Out of scope* for this remediation.
+    `voice_samples` table plumbed with one-row backfill from existing
+    voices; UI deferred to Phase 7.
 
 ---
 
 ## Revision history
 
 **2026-04-19** — Initial remediation plan drafted after Voicebox v0.4.0 API inspection on Ben's Windows machine.
+
+**2026-04-18** — Remediation shipped across seven atomic commits (`6aa646d`
+… `91a32da` plus `phase5r-docs`). All decisions resolved (see updated
+"Open questions" section). `docs/VOICEBOX-WIRING.md` rewritten as the
+authoritative integration reference; the `TODO(voicebox-verify)` markers
+have been removed from the codebase.

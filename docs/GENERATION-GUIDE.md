@@ -1,27 +1,51 @@
 # TTS Generation — User Guide
 
-This guide walks through generating per-segment audio on a Mac with Voicebox
-running. On Windows (or any machine with `VOICEBOX_ENABLED=false`), all of this
-UI still renders but the Generate button degrades to a read-only explainer.
+This guide walks through generating per-segment audio against a live Voicebox
+instance (Windows or Mac — Voicebox v0.4.0 supports both). When
+`voicebox_enabled` is `false` or no URL is configured, all of this UI still
+renders but the Generate button degrades to a read-only explainer.
+
+## First-time setup
+
+Voicebox runs at a runtime-assigned port (e.g. `localhost:17493`) and is **not**
+auto-discovered. One-time setup:
+
+1. Install and start Voicebox (<https://github.com/jamiepine/voicebox>); read
+   the bound port from its UI.
+2. In Chorus open **Settings → Voicebox**. Paste the full base URL into the
+   URL field and click **Test connection** — a green confirmation means
+   Chorus can reach the API.
+3. Tick **Enable** and click **Save**. The change is persisted to
+   `data/voicebox_config.json` and applied on the next request — **no backend
+   restart required**.
+4. Add at least one TTS model from inside the Voicebox UI (Qwen3-TTS is the
+   recommended default). Chorus will lazy-load whatever model a voice's
+   engine requires on first use.
+
+See `docs/VOICEBOX-WIRING.md` for the full reference (config persistence,
+exception hierarchy, endpoint table, lazy-loading internals).
 
 ## Prerequisites
 
-1. **Voicebox is installed and running on the Mac.** See
-   `docs/VOICEBOX-WIRING.md` for the integration punchlist. Confirm:
+1. **Voicebox configured and reachable.** Verify via Settings → Voicebox →
+   Test connection, or:
    ```bash
-   curl http://localhost:8090/        # or whatever VOICEBOX_BASE_URL points at
    curl http://localhost:8765/api/voicebox/status
-   # → {"enabled": true, "reachable": true, ...}
+   # → {"enabled": true, "reachable": true, "base_url": "...", ...}
    ```
 2. **Voices exist in the Chorus Library with `voicebox_profile_id` populated.**
-   Creating a voice with a reference audio file while `VOICEBOX_ENABLED=false`
-   leaves `voicebox_profile_id` `NULL` — generation will fail for any character
-   assigned that voice. When Voicebox is live, voices created (or
-   reference-audio-replaced) through the UI get their profile id back-filled
-   automatically.
-3. **Attribution is complete for the target chapter.** Chapter Review shows
+   Voices are now created **eagerly** in Voicebox the moment they're saved in
+   Chorus (Phase 5R) — but a voice created while Voicebox was unreachable
+   will land with `voicebox_profile_id IS NULL` and a "Needs sync" badge on
+   its card. Click the badge to retry; the backend re-runs the
+   `create_profile` + `add_sample_to_profile` calls.
+3. **Each voice picks its engine at creation time.** The VoiceEditor's
+   engine dropdown writes `voicebox_engine` (default `qwen3-tts`). Changing
+   engine on an existing voice deletes + recreates its Voicebox profile and
+   requires regeneration of any existing audio assigned to it.
+4. **Attribution is complete for the target chapter.** Chapter Review shows
    per-chapter status; generate only after the chapter is `attributed`.
-4. **Every speaking character has a voice assignment.** The Casting view
+5. **Every speaking character has a voice assignment.** The Casting view
    enforces this — a character without an assignment will cause "No voice
    resolved" errors at generation time.
 
@@ -45,18 +69,31 @@ UI still renders but the Generate button degrades to a read-only explainer.
    (driven by `voicebox_default_wps = 2.5`), and any blocking issues
    (characters without voices, voices without profiles). Click **Generate** to
    enqueue.
-5. **Watch the progress bar.** Per-segment icons flip from `pending` →
+5. **First generation per engine triggers model load.** A global
+   ModelLoadingBanner shows progress (e.g. `Loading qwen-tts-1.7B… 47%`).
+   First-time loads typically take 2–4 minutes; subsequent generations of
+   the same engine are immediate (model cached in Voicebox + flagged in the
+   backend's in-process loader cache).
+6. **Watch the progress bar.** Per-segment icons flip from `pending` →
    `generating` (spinner) → `generated` (waveform). Errors show a red `!`. The
    pipeline uses one in-flight generation at a time by default
    (`voicebox_max_concurrent_generations = 1`).
-6. **Listen and act per segment.** Open the Detail Panel (tap a segment). The
+7. **Listen and act per segment.** Open the Detail Panel (tap a segment). The
    **Audio** section exposes:
    - **Play** — stream the raw file from disk.
-   - **Regenerate** — wipe both raw and approved files and re-enqueue.
+   - **Regenerate** — routes through Voicebox's
+     `POST /generate/{id}/regenerate` when the segment has a stored
+     `voicebox_generation_id` (reuses original profile + engine state on
+     the Voicebox side); falls back to a fresh generate when the generation
+     id is missing. Wipes both raw and approved files first.
+   - **Retry** — only shown for segments with `status='error'`. Routes
+     through `POST /generate/{id}/retry` when a prior generation id exists.
    - **Approve** — stamp `segments.approved_at` and copy the raw file under
      `audio/approved/`. The source file is preserved.
    - **Reject** — clear `segments.approved_at` only; the file stays on disk.
-7. **Bulk actions.** Select multiple segments and use
+   - The truncated `voicebox_generation_id` shows above the buttons for
+     debugging — copy it to look up the generation in Voicebox's UI.
+8. **Bulk actions.** Select multiple segments and use
    **Approve selected** / **Regenerate selected** from the bulk actions menu.
 
 ## File layout
