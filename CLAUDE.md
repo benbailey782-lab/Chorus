@@ -14,6 +14,7 @@
 - Phase 0 (Foundation) — scaffolded.
 - Phase 1 (Ingestion + Library) — TXT + EPUB ingestion, naive chapter detection, Library + Project views. Claude chapter-detection fallback not yet wired.
 - Phase 2 (Voice Library) — **done in Voicebox-stub mode** (dev is on Windows, no Voicebox installed). Full CRUD + metadata + optional reference-audio upload + mobile-first dark UI at §15.8 tokens. Voicebox wiring punch-list: `docs/VOICEBOX-WIRING.md`.
+- Phase 3 (Cast Extraction + Auto-Casting) — **done via file-drop LLM integration (§12A)**. No Anthropic SDK calls; prompts written to `data/llm_queue/pending/`, responses read from `data/llm_queue/responses/`. Jobs worker reconciles them. Operator playbook: `docs/FILE-DROP-WORKFLOW.md`.
 - Later phases per spec §17.
 
 ## Conventions
@@ -67,3 +68,25 @@ Drop the `A Game of Thrones` EPUB into a new project → see it parsed into ~73 
 ## Phase-2 exit criterion (revised for Windows dev)
 
 Add 5 voices via the UI with full §7.2 metadata (incl. optional reference-audio upload), confirm persistence across restarts, browse+filter on phone at 375px, edit and delete voices. No live Voicebox required. Upstream spec criterion ("preview plays from phone") is satisfied by streaming the stored reference audio; generated TTS preview arrives when Voicebox is wired (see `docs/VOICEBOX-WIRING.md`).
+
+## Phase-3 exit criterion
+
+Extract AGoT cast via file-drop LLM integration, auto-cast from voice library, manually inspect assignments are sensible.
+
+### Phase-3 test recipe (Windows dev)
+
+1. Start the backend + frontend (`scripts\run.bat`) and the companion Claude Code session (see `docs/FILE-DROP-WORKFLOW.md`).
+2. Create a project and ingest a short EPUB or TXT via the Library tab.
+3. Add at least one narrator-pool and one main-pool voice via the Voices tab.
+4. Open the project → "Open casting" → "Extract Cast" → confirm the modal → the job should appear in `data/llm_queue/pending/request_<id>.md` and the companion session will respond.
+5. Within seconds, the cast list populates; project status flips to `casting`.
+6. Click "Run Auto-Cast" → a second request file lands; the companion session responds; each character card shows its assigned voice.
+7. Click any character → pick a different voice from the right pane to verify manual override.
+
+### Phase-3 conventions
+
+- **Job `kind` vs spec's `type`**: the v1 DB schema used `kind`. We keep it for compatibility and map in-code vocabulary: `extract_characters`, `auto_cast`, `attribute_chapter` (Phase 4), etc. Spec §9.8 calls the column `type` — treat the two names as synonymous.
+- **Handlers bind at import**: `backend/main.py` imports `extract_characters` and `auto_cast` so their `@register_handler` decorators fire before the worker starts. Any new handler added in a later phase must be imported in `main.py` too, or the worker will fail its job with "no handler registered".
+- **Response retries are fix-and-re-drop**: when a job fails due to bad JSON or missing fields, the request file stays in `pending/` and the response file stays in `responses/`. Edit the response file, save, and the worker will pick it up within 2s. No API restart needed.
+- **`extract_cast_char_limit`** (default 300 000) caps the book text substituted into `{BOOK_TEXT}`. On truncation the extract-cast API response + UI modal surface the spec-mandated warning telling the operator to use a single-book EPUB.
+- **Narrative style** for auto-cast is currently hardcoded to `third-person limited with POV shifts` (TODO for per-project override in Phase 7).
