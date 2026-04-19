@@ -16,13 +16,13 @@ import { usePlayerStore } from "../../stores/playerStore";
  * Interaction model
  * -----------------
  * The entire card body is a drag handle, but drag only initiates after a
- * sustained 300 ms press. This avoids stealing taps meant for play/pause or
+ * sustained 100 ms press. This avoids stealing taps meant for play/pause or
  * close. Flow:
- *   - pointerdown on card → start 300 ms timer + track start point
+ *   - pointerdown on card → start 100 ms timer + track start point
  *   - pointermove before timer: if moved > 5 px, cancel timer and treat as
  *     scroll (don't drag, don't click)
  *   - timer fires without significant movement → enter drag mode, capture
- *     pointer
+ *     pointer; subsequent click is suppressed via dragEnteredRef
  *   - pointerup before timer → treat as click (but card body isn't itself
  *     clickable; the buttons handle their own taps via stopPropagation)
  *
@@ -59,7 +59,7 @@ const MOBILE_W = 280;
 const MOBILE_H = 72;
 const EDGE_MARGIN = 16;
 const BOTTOM_NAV_HEIGHT = 64; // 4rem — see Layout.tsx
-const DRAG_HOLD_MS = 300;
+const DRAG_HOLD_MS = 100;
 const DRAG_MOVE_THRESHOLD_PX = 5;
 const SNAP_DISTANCE_PX = 50;
 
@@ -218,6 +218,10 @@ export default function MiniPlayer() {
   const activePointerIdRef = useRef<number | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const cancelledRef = useRef(false);
+  // Flips to true when the drag-hold timer fires (i.e. drag mode was
+  // actually entered). Used by handleBodyClick to suppress the post-drag
+  // click → navigate chain. Reset on every new pointerdown.
+  const dragEnteredRef = useRef(false);
 
   // Watch viewport breakpoint + resize.
   useEffect(() => {
@@ -274,6 +278,7 @@ export default function MiniPlayer() {
       // Only primary button / touch / pen.
       if (e.button !== undefined && e.button !== 0) return;
       cancelledRef.current = false;
+      dragEnteredRef.current = false;
       pressStartRef.current = { x: e.clientX, y: e.clientY };
       activePointerIdRef.current = e.pointerId;
       // Compute offset from card origin → pointer so dragging feels natural.
@@ -288,6 +293,7 @@ export default function MiniPlayer() {
       pressTimerRef.current = window.setTimeout(() => {
         // Timer fired — enter drag mode if not cancelled by move/up.
         if (cancelledRef.current) return;
+        dragEnteredRef.current = true;
         setIsDragging(true);
         setIsSnapping(false);
         try {
@@ -439,10 +445,19 @@ export default function MiniPlayer() {
   };
 
   // Middle column click → open full player. Guarded so a drag doesn't
-  // trigger navigation on release. We intercept at pointerup-time: if a
-  // drag was active, don't navigate.
+  // trigger navigation on release. We suppress the click whenever drag
+  // mode was entered during this interaction (dragEnteredRef), which
+  // covers both "dragged with movement" and "held long enough to enter
+  // drag mode but released without moving" cases.
   const handleBodyClick = (e: React.MouseEvent) => {
+    if (dragEnteredRef.current) {
+      dragEnteredRef.current = false; // reset for next interaction
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (isDragging) {
+      // Safety net — shouldn't hit this since dragEnteredRef covers it.
       e.preventDefault();
       return;
     }
@@ -466,19 +481,28 @@ export default function MiniPlayer() {
       onClick={handleBodyClick}
       className={[
         "fixed z-40 select-none",
-        "rounded-2xl shadow-xl backdrop-blur-md",
+        "rounded-2xl backdrop-blur-md",
         "border",
         isError ? "border-error bg-error/10" : "border-accent/40 bg-surface/85",
-        isDragging ? "cursor-grabbing" : "cursor-grab",
+        isDragging ? "cursor-grabbing shadow-2xl" : "cursor-grab shadow-xl",
         // Smooth snap transition; disabled mid-drag for 1:1 tracking.
-        isDragging ? "" : isSnapping ? "transition-transform duration-[250ms] ease-out" : "",
+        // Box-shadow animates independently for the drag lift effect.
+        isDragging
+          ? "transition-[box-shadow] duration-150 ease-out"
+          : isSnapping
+            ? "transition-transform duration-[250ms] ease-out"
+            : "transition-[box-shadow] duration-150 ease-out",
       ].join(" ")}
       style={{
         left: 0,
         top: 0,
         width: w,
         height: h,
-        transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
+        // Scale is baked into the transform since an inline transform
+        // overrides Tailwind's class-based scale utility.
+        transform: `translate3d(${position.x}px, ${position.y}px, 0)${
+          isDragging ? " scale(1.05)" : ""
+        }`,
         touchAction: "none",
       }}
     >
