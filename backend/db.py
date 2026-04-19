@@ -5,7 +5,7 @@ from typing import Iterator
 
 from backend.config import get_settings
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS segments (
     audio_path TEXT,
     duration_ms INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
+    text_modified INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(chapter_id, order_index)
@@ -267,6 +268,19 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         }
         if "pov_character_id" not in existing_cols:
             conn.execute("ALTER TABLE chapters ADD COLUMN pov_character_id TEXT")
+
+    if current < 5:
+        # Phase 4 review UI: adds `segments.text_modified` so the UI can show a
+        # "text edited" badge and keep re-renders deterministic. Additive
+        # (ALTER ADD COLUMN) with a non-null default, so no data risk — runs
+        # idempotently when re-applied.
+        existing_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(segments)").fetchall()
+        }
+        if "text_modified" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE segments ADD COLUMN text_modified INTEGER NOT NULL DEFAULT 0"
+            )
 
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))

@@ -1,15 +1,27 @@
 import { Link, Route, Routes } from "react-router-dom";
 
 import BottomNav from "./components/BottomNav";
+import ToastContainer from "./components/Toast";
 import Casting from "./routes/Casting";
+import ChapterReview from "./routes/ChapterReview";
 import Library from "./routes/Library";
 import PlayerStub from "./routes/PlayerStub";
 import Project from "./routes/Project";
 import Settings from "./routes/Settings";
 import VoiceEditor from "./routes/VoiceEditor";
 import VoiceLibrary from "./routes/VoiceLibrary";
+import { ToastProvider } from "./lib/toast";
 
 export default function App() {
+  return (
+    <ToastProvider>
+      <AppShell />
+      <ToastContainer />
+    </ToastProvider>
+  );
+}
+
+function AppShell() {
   return (
     <div className="min-h-full flex flex-col">
       {/* Header is compact on mobile so the useful stuff is above the fold
@@ -39,6 +51,10 @@ export default function App() {
           <Route path="/" element={<Library />} />
           <Route path="/project/:idOrSlug" element={<Project />} />
           <Route path="/project/:idOrSlug/cast" element={<Casting />} />
+          <Route
+            path="/project/:idOrSlug/chapters/:chapterId"
+            element={<ChapterReview />}
+          />
           <Route path="/voices" element={<VoiceLibrary />} />
           <Route path="/voices/new" element={<VoiceEditor />} />
           <Route path="/voices/:id/edit" element={<VoiceEditor />} />

@@ -45,3 +45,54 @@ export const POOL_TARGETS: Record<Pool, { min: number; max: number; label: strin
 };
 
 export const AUDIO_ACCEPT = ".wav,.mp3,.m4a,.flac,.ogg,audio/*";
+
+// --- Phase 4: per-chapter attribution review -------------------------------
+
+export const RENDER_MODES = [
+  "prose",
+  "dialogue",
+  "epigraph",
+  "letter",
+  "poetry",
+  "song_lyrics",
+  "emphasis",
+  "thought",
+  "chapter_heading",
+] as const;
+
+// Confidence bucket thresholds — green >=85, yellow 70-84, red <70.
+export const CONFIDENCE = {
+  GREEN_MIN: 85,
+  YELLOW_MIN: 70,
+  colorFor: (c: number | null | undefined): "green" | "yellow" | "red" | "neutral" => {
+    if (c == null) return "neutral";
+    if (c >= 85) return "green";
+    if (c >= 70) return "yellow";
+    return "red";
+  },
+  hexFor: (c: number | null | undefined): string => {
+    const band = CONFIDENCE.colorFor(c);
+    if (band === "green") return "#10B981";
+    if (band === "yellow") return "#F59E0B";
+    if (band === "red") return "#EF4444";
+    return "#2A2A2E";
+  },
+} as const;
+
+export const EMOTION_TAG_SUGGESTIONS = [
+  "whispered",
+  "shouted",
+  "muttered",
+  "gentle",
+  "cold",
+  "angry",
+  "amused",
+  "sad",
+  "urgent",
+  "calm",
+  "hushed",
+  "emphatic",
+  "trembling",
+  "warm",
+  "stern",
+];

@@ -141,6 +141,92 @@ export interface AutoCastResult {
   voice_library_size: number;
 }
 
+// --- Attribution + segments (§9.5, Phase 4) --------------------------------
+
+export type RenderMode =
+  | "prose"
+  | "dialogue"
+  | "epigraph"
+  | "letter"
+  | "poetry"
+  | "song_lyrics"
+  | "emphasis"
+  | "thought"
+  | "chapter_heading";
+
+export interface SegmentCharacter {
+  id: string;
+  name: string;
+  character_archetype: string | null;
+  voice_id: string | null;
+}
+
+export interface Segment {
+  id: string;
+  chapter_id: string;
+  order_index: number;
+  text: string;
+  render_mode: RenderMode;
+  emotion_tags: string[];
+  confidence: number | null;
+  notes: string | null;
+  character: SegmentCharacter | null;
+  voice_override_id: string | null;
+  audio_path: string | null;
+  duration_ms: number | null;
+  status: string;
+  text_modified: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SegmentUpdate {
+  character_id?: string | null;
+  render_mode?: RenderMode;
+  emotion_tags?: string[];
+  text?: string;
+  notes?: string | null;
+}
+
+export interface BulkReassignChanges {
+  character_id?: string | null;
+  render_mode?: RenderMode;
+  emotion_tags?: string[];
+}
+
+export interface BulkReassignRequest {
+  segment_ids: string[];
+  changes: BulkReassignChanges;
+}
+
+export interface BulkReassignResponse {
+  updated: number;
+}
+
+export interface ChapterMeta {
+  id: string;
+  project_id: string;
+  number: number;
+  title: string;
+  word_count: number;
+  pov_character_id: string | null;
+  pov_character_name: string | null;
+  segment_count: number;
+}
+
+export interface AttributeResponse {
+  job_id: string;
+  request_path: string;
+  chapter_chars: number;
+  cast_size: number;
+}
+
+export interface AttributeAllResponse {
+  chapter_count: number;
+  job_ids: string[];
+  skipped_chapter_ids: string[];
+}
+
 // --- Voice library (§7.2) ---------------------------------------------------
 
 export interface Voice {
@@ -330,4 +416,37 @@ export const api = {
       `/api/projects/${projectIdOrSlug}/jobs${qs ? "?" + qs : ""}`,
     );
   },
+
+  // ---- Attribution + segments (Phase 4) ----
+
+  getChapter: (chapterId: string) =>
+    request<ChapterMeta>(`/api/chapters/${chapterId}`),
+
+  listSegments: (chapterId: string) =>
+    request<Segment[]>(`/api/chapters/${chapterId}/segments`),
+
+  updateSegment: (segmentId: string, body: SegmentUpdate) =>
+    request<Segment>(`/api/segments/${segmentId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  bulkReassignSegments: (body: BulkReassignRequest) =>
+    request<BulkReassignResponse>("/api/segments/bulk-reassign", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  attributeChapter: (chapterId: string) =>
+    request<AttributeResponse>(`/api/chapters/${chapterId}/attribute`, {
+      method: "POST",
+    }),
+
+  attributeAllChapters: (projectIdOrSlug: string) =>
+    request<AttributeAllResponse>(
+      `/api/projects/${projectIdOrSlug}/attribute-all`,
+      { method: "POST" },
+    ),
 };

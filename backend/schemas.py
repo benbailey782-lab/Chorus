@@ -268,6 +268,7 @@ class SegmentOut(BaseModel):
     audio_path: Optional[str] = None
     duration_ms: Optional[int] = None
     status: str = "pending"
+    text_modified: bool = False
     created_at: str
     updated_at: str
 
@@ -308,3 +309,19 @@ class AttributeAllResponse(BaseModel):
     chapter_count: int
     job_ids: list[str] = Field(default_factory=list)
     skipped_chapter_ids: list[str] = Field(default_factory=list)  # already had segments
+
+
+class ChapterMeta(BaseModel):
+    """GET /api/chapters/{id} — metadata shape for the review UI toolbar.
+
+    Mirrors ChapterOut but adds resolved pov_character_name + segment_count so
+    the client doesn't need a second round-trip to render the header.
+    """
+    id: str
+    project_id: str
+    number: int
+    title: Optional[str] = None
+    word_count: Optional[int] = None
+    pov_character_id: Optional[str] = None
+    pov_character_name: Optional[str] = None
+    segment_count: int = 0

@@ -15,6 +15,7 @@ from backend.schemas import (
     AttributeResponse,
     BulkReassignRequest,
     BulkReassignResponse,
+    ChapterMeta,
     SegmentCharacter,
     SegmentOut,
     SegmentUpdate,
@@ -57,6 +58,7 @@ def _row_to_segment(row, character_row: Optional[Any]) -> SegmentOut:
         audio_path=d.get("audio_path"),
         duration_ms=d.get("duration_ms"),
         status=d.get("status", "pending"),
+        text_modified=bool(d.get("text_modified") or 0),
         created_at=d["created_at"],
         updated_at=d["updated_at"],
     )
@@ -105,6 +107,47 @@ def _character_in_project(character_id: str, project_id: str) -> bool:
             (character_id, project_id),
         ).fetchone()
     return row is not None
+
+
+# ---------------------------------------------------------------------------
+# Chapter metadata (for the review UI toolbar)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/chapters/{chapter_id}", response_model=ChapterMeta)
+def get_chapter_meta(chapter_id: str) -> ChapterMeta:
+    """Compact chapter metadata with resolved POV name + segment count.
+
+    The review UI needs this up front to render the toolbar header; querying
+    the full project/chapter list + then re-resolving characters client-side
+    would be two extra round-trips for information the server already has.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT c.id, c.project_id, c.number, c.title, c.word_count,
+                   c.pov_character_id,
+                   (SELECT ch.name FROM characters ch
+                    WHERE ch.id = c.pov_character_id) AS pov_character_name,
+                   (SELECT COUNT(*) FROM segments s WHERE s.chapter_id = c.id)
+                       AS segment_count
+            FROM chapters c
+            WHERE c.id = ?
+            """,
+            (chapter_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, f"chapter {chapter_id!r} not found")
+    return ChapterMeta(
+        id=row["id"],
+        project_id=row["project_id"],
+        number=row["number"],
+        title=row["title"],
+        word_count=row["word_count"],
+        pov_character_id=row["pov_character_id"],
+        pov_character_name=row["pov_character_name"],
+        segment_count=row["segment_count"] or 0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +257,19 @@ def update_segment(segment_id: str, body: SegmentUpdate) -> SegmentOut:
                 f"character_id {patch['character_id']!r} is not in this project's cast",
             )
 
+    # If text is present in the payload, decide whether it actually changed so
+    # we only flip `text_modified` on real edits (no-op PATCHes shouldn't mark
+    # the segment dirty).
+    text_changed = False
+    if "text" in patch:
+        with connect() as conn:
+            cur_row = conn.execute(
+                "SELECT text FROM segments WHERE id=?", (segment_id,)
+            ).fetchone()
+        if cur_row is None:
+            raise HTTPException(404, f"segment {segment_id!r} not found")
+        text_changed = (patch["text"] or "") != (cur_row["text"] or "")
+
     sets: list[str] = []
     params: list[Any] = []
     for col in ("character_id", "render_mode", "text", "notes"):
@@ -223,6 +279,8 @@ def update_segment(segment_id: str, body: SegmentUpdate) -> SegmentOut:
     if "emotion_tags" in patch:
         sets.append("emotion_tags_json = ?")
         params.append(json.dumps(patch["emotion_tags"] or [], ensure_ascii=False))
+    if text_changed:
+        sets.append("text_modified = 1")
 
     if not sets:
         return _segment_to_out(segment_id)
