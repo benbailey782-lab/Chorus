@@ -518,3 +518,15 @@ class SegmentTimingOut(BaseModel):
     duration_ms: int
     speaker_name: Optional[str] = None
     text_preview: str
+
+
+class AssemblyTriggerOut(BaseModel):
+    """Response from POST /api/chapters/{id}/assemble.
+
+    ``job_id`` is null when the cache short-circuits the request
+    (``from_cache=True`` + matching hash + file on disk) — the caller can
+    immediately fetch ``/audio`` without polling a job.
+    """
+    chapter_id: str
+    job_id: Optional[str] = None
+    from_cache: bool

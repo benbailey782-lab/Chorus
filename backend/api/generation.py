@@ -106,11 +106,15 @@ async def generate_segment_endpoint(segment_id: str) -> GenerationTriggerOut:
 
     Use :meth:`regenerate_segment_endpoint` instead to *force* re-synthesis.
     """
-    _segment_context(segment_id)  # 404 if missing
+    _, chapter_id = _segment_context(segment_id)  # 404 if missing
     try:
         result = await generation.trigger_segment(segment_id, force=False)
     except generation.GenerationError as e:
         raise HTTPException(400, str(e)) from e
+    # A new generation invalidates any cached chapter assembly. Late import
+    # keeps the generation<->assembly dependency one-way.
+    from backend.audio import assembly  # noqa: WPS433 — intentional late import
+    assembly.invalidate_chapter_cache(chapter_id)
     return GenerationTriggerOut(
         job_id=result.job_id, estimated_seconds=result.estimated_seconds
     )
@@ -126,11 +130,13 @@ async def regenerate_segment_endpoint(segment_id: str) -> GenerationTriggerOut:
     synchronously, then enqueues a new job. This is destructive — if the user
     wants to preserve the old approved cut, they should copy it out first.
     """
-    _segment_context(segment_id)
+    _, chapter_id = _segment_context(segment_id)
     try:
         result = await generation.trigger_segment(segment_id, force=True)
     except generation.GenerationError as e:
         raise HTTPException(400, str(e)) from e
+    from backend.audio import assembly  # noqa: WPS433 — intentional late import
+    assembly.invalidate_chapter_cache(chapter_id)
     return GenerationTriggerOut(
         job_id=result.job_id, estimated_seconds=result.estimated_seconds
     )
@@ -173,6 +179,10 @@ def approve_segment(segment_id: str) -> SegmentOut:
             "updated_at=datetime('now') WHERE id=?",
             (approved_iso, segment_id),
         )
+    # Approval mutates segments.updated_at / approved_at, which feeds the
+    # assembly cache hash. Invalidate so the next player request re-assembles.
+    from backend.audio import assembly  # noqa: WPS433 — intentional late import
+    assembly.invalidate_chapter_cache(chapter_id)
     return _segment_out(segment_id)
 
 
@@ -186,7 +196,7 @@ def reject_segment(segment_id: str) -> SegmentOut:
     on status and just guarantees ``approved_at`` is NULL).
     Files are not deleted — the user may want to re-approve later.
     """
-    _segment_context(segment_id)
+    _, chapter_id = _segment_context(segment_id)
     with connect() as conn:
         conn.execute(
             """
@@ -198,6 +208,8 @@ def reject_segment(segment_id: str) -> SegmentOut:
             """,
             (segment_id,),
         )
+    from backend.audio import assembly  # noqa: WPS433 — intentional late import
+    assembly.invalidate_chapter_cache(chapter_id)
     return _segment_out(segment_id)
 
 

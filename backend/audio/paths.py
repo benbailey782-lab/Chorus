@@ -42,6 +42,36 @@ def approved_dir(project_id: str, chapter_id: str) -> Path:
     return p
 
 
+def assembled_dir(project_id: str) -> Path:
+    """Return ``data/projects/<project_id>/audio/assembled/`` (created on first access).
+
+    Phase 6 — single flat directory per project holding one concatenated WAV
+    per chapter. Chapter id appears in the filename rather than a subdirectory
+    because there is at most one assembled file per chapter.
+    """
+    p = project_audio_dir(project_id) / "assembled"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def assembled_chapter_path(project_id: str, chapter_id: str) -> Path:
+    """Build the full path to a chapter's concatenated WAV file.
+
+    Pure path builder — the parent directory is created by
+    :func:`assembled_dir`, which this helper invokes.
+    """
+    return assembled_dir(project_id) / f"{chapter_id}.wav"
+
+
+def assembled_concat_list_path(project_id: str, chapter_id: str) -> Path:
+    """Build the path to the ffmpeg concat-demuxer input file.
+
+    Written temporarily during assembly and deleted on success (§9.7 Phase 6
+    assembly pipeline).
+    """
+    return assembled_dir(project_id) / f"{chapter_id}.concat.txt"
+
+
 def raw_segment_glob(project_id: str, chapter_id: str, segment_id: str) -> list[Path]:
     """Existing files matching ``segment_<segment_id>.*`` in the raw dir.
 

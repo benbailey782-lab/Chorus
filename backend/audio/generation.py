@@ -603,6 +603,25 @@ async def handle_generate_segment(job: dict[str, Any], payload: Any) -> None:
         log.warning("generate_segment job %s failed: %s", job_id, e)
         return
 
+    # Successful generation changes audio_path + updated_at on the segment,
+    # which feeds the chapter-assembly cache hash. Invalidate so downstream
+    # assembly re-runs on next request. Late import keeps the
+    # generation→assembly edge one-way and avoids a circular import.
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT chapter_id FROM segments WHERE id = ?",
+                (result.segment_id,),
+            ).fetchone()
+        if row:
+            from backend.audio import assembly as _assembly  # noqa: WPS433
+            _assembly.invalidate_chapter_cache(row["chapter_id"])
+    except Exception:  # noqa: BLE001 — invalidation is best-effort
+        log.exception(
+            "handle_generate_segment: cache invalidation failed for %s",
+            result.segment_id,
+        )
+
     repo.set_status(
         job_id,
         "complete",
