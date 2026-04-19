@@ -36,23 +36,27 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from backend.audio import paths as audio_paths
+from backend.audio import model_loader, paralinguistic, paths as audio_paths
 from backend.config import get_settings
 from backend.db import connect
 from backend.jobs import repo, worker
 from backend.nlp.merge_pronunciations import MergedEntry, merge_pronunciations
-from backend.voices import voicebox_client
+from backend.voices import voicebox_client as vb
 from backend.voices.voicebox_client import (
-    SynthesisOptions,
-    SynthesisResult,
     VoiceboxError,
+    VoiceboxGenerationError,
+    VoiceboxModelNotLoaded,
+    VoiceboxNotConfigured,
     VoiceboxNotEnabled,
+    VoiceboxTimeoutError,
+    VoiceboxUnreachable,
     VoiceboxUnreachableError,
 )
 
 log = logging.getLogger(__name__)
 
 JOB_KIND = "generate_segment"
+RETRY_JOB_KIND = "retry_segment"
 
 # Segments that are considered "already covered" when computing
 # "ungenerated" estimates / chapter-level triggers.
@@ -308,8 +312,8 @@ def apply_pronunciations(
 
 async def resolve_voice_for_segment(
     segment_row: sqlite3.Row, *, conn: sqlite3.Connection
-) -> str:
-    """Return the Voicebox ``profile_id`` to use for this segment.
+) -> tuple[str, str]:
+    """Return ``(voicebox_profile_id, voicebox_engine)`` to use for this segment.
 
     Priority:
       1. ``segments.voice_override_id``
@@ -323,24 +327,30 @@ async def resolve_voice_for_segment(
         Voicebox; see §7.4).
     """
 
-    def _voice_profile(voice_id: str) -> tuple[Optional[str], Optional[str]]:
+    def _voice_profile(voice_id: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
         row = conn.execute(
-            "SELECT id, voicebox_profile_id FROM voices WHERE id = ?", (voice_id,)
+            "SELECT id, voicebox_profile_id, voicebox_engine "
+            "FROM voices WHERE id = ?",
+            (voice_id,),
         ).fetchone()
         if not row:
-            return None, None
-        return row["id"], row["voicebox_profile_id"]
+            return None, None, None
+        # voicebox_engine is NOT NULL DEFAULT 'qwen3-tts' per v8 schema, but be
+        # defensive: fall back to the default if the column is somehow empty.
+        engine = row["voicebox_engine"] if "voicebox_engine" in row.keys() else None
+        engine = engine or "qwen3-tts"
+        return row["id"], row["voicebox_profile_id"], engine
 
     # (1) Segment-level override.
     override_id = segment_row["voice_override_id"] if "voice_override_id" in segment_row.keys() else None
     if override_id:
-        vid, profile = _voice_profile(override_id)
+        vid, profile, engine = _voice_profile(override_id)
         if vid is not None:
             if not profile:
                 raise VoiceMissingProfileError(
                     f"segment voice override {vid!r} has no voicebox_profile_id"
                 )
-            return profile
+            return profile, engine or "qwen3-tts"
         log.warning(
             "segment %s: voice_override_id=%r not found in voices table; falling through",
             segment_row["id"], override_id,
@@ -353,13 +363,13 @@ async def resolve_voice_for_segment(
             "SELECT voice_id FROM characters WHERE id = ?", (char_id,)
         ).fetchone()
         if char_row and char_row["voice_id"]:
-            vid, profile = _voice_profile(char_row["voice_id"])
+            vid, profile, engine = _voice_profile(char_row["voice_id"])
             if vid is not None:
                 if not profile:
                     raise VoiceMissingProfileError(
                         f"character voice {vid!r} has no voicebox_profile_id"
                     )
-                return profile
+                return profile, engine or "qwen3-tts"
             log.warning(
                 "segment %s: character %s has voice_id=%r but voice row missing",
                 segment_row["id"], char_id, char_row["voice_id"],
@@ -367,8 +377,8 @@ async def resolve_voice_for_segment(
 
     # (3) Narrator fallback.
     narrator = conn.execute(
-        "SELECT id, voicebox_profile_id FROM voices WHERE pool = 'narrator' "
-        "ORDER BY id LIMIT 1"
+        "SELECT id, voicebox_profile_id, voicebox_engine FROM voices "
+        "WHERE pool = 'narrator' ORDER BY id LIMIT 1"
     ).fetchone()
     if narrator is None:
         raise NoVoiceResolvedError(
@@ -380,7 +390,8 @@ async def resolve_voice_for_segment(
             f"narrator fallback voice {narrator['id']!r} has no voicebox_profile_id "
             "(not registered with Voicebox)"
         )
-    return narrator["voicebox_profile_id"]
+    engine = narrator["voicebox_engine"] if "voicebox_engine" in narrator.keys() else None
+    return narrator["voicebox_profile_id"], engine or "qwen3-tts"
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +462,53 @@ def _delete_approved_files(project_id: str, chapter_id: str, segment_id: str) ->
     return n
 
 
+async def _do_voicebox_synthesize(
+    *,
+    voice_profile_id: str,
+    engine: str,
+    segment_row: sqlite3.Row,
+    text: str,
+) -> tuple[bytes, Optional[int], str, Optional[str]]:
+    """Direct call against the Voicebox v0.4.0 API.
+
+    1. Ensure the engine's backing model is loaded (idempotent after first call).
+    2. Apply paralinguistic tag mapping from ``segment.emotion_tags``.
+    3. POST /generate → poll /generate/{id}/status → GET /audio/{id}.
+
+    Returns ``(audio_bytes, duration_ms, generation_id, content_type)``.
+    Raises any :class:`VoiceboxError` subclass on failure.
+    """
+    # 1. Ensure model loaded on Voicebox (cached in-process).
+    await model_loader.ensure_model_loaded(engine)
+
+    # 2. Apply paralinguistic tag mapping. emotion_tags are stored as a JSON
+    #    array in segments.emotion_tags_json; _load_segment_context returns
+    #    the raw row so we parse on demand.
+    emotion_tags: list[str] = []
+    try:
+        raw_tags = segment_row["emotion_tags_json"] if "emotion_tags_json" in segment_row.keys() else None
+    except (IndexError, KeyError):
+        raw_tags = None
+    if raw_tags:
+        try:
+            parsed = json.loads(raw_tags)
+            if isinstance(parsed, list):
+                emotion_tags = [str(t) for t in parsed]
+        except (TypeError, ValueError):
+            emotion_tags = []
+    effective_text = paralinguistic.apply_paralinguistic_tags(
+        text, emotion_tags, engine
+    )
+
+    # 3. Generate via real Voicebox API.
+    audio_bytes, duration_ms, generation_id, content_type = await vb.generate_and_wait(
+        profile_id=voice_profile_id,
+        text=effective_text,
+        engine=engine,
+    )
+    return audio_bytes, duration_ms, generation_id, content_type
+
+
 async def generate_segment(
     segment_id: str, *, force: bool = False
 ) -> GenerationResult:
@@ -462,11 +520,14 @@ async def generate_segment(
          state (no-op).
       3. Transition segment to ``status='generating'``.
       4. Merge pronunciations, apply substitution.
-      5. Resolve voice profile.
-      6. Call ``voicebox_client.synthesize`` under the concurrency semaphore.
-      7. Derive extension from Content-Type, write file.
+      5. Resolve voice profile + engine.
+      6. On regenerate: if segment has a prior ``voicebox_generation_id``,
+         POST /generate/{id}/regenerate instead of a fresh /generate; this
+         lets Voicebox seed the new attempt from the prior sampling context.
+      7. Poll until terminal, download audio, write to disk.
       8. Update ``segments`` row: ``audio_path``, ``duration_ms``,
-         ``status='generated'``. Clears ``approved_at`` when regenerating.
+         ``voicebox_generation_id``, ``status='generated'``. Clears
+         ``approved_at`` when regenerating.
       9. Return :class:`GenerationResult`.
 
     Raises on Voicebox errors. The caller (usually the direct job handler) is
@@ -475,7 +536,6 @@ async def generate_segment(
     with connect() as conn:
         seg_row, chapter_id, project_id = _load_segment_context(segment_id, conn)
         existing_path = seg_row["audio_path"]
-        existing_status = seg_row["status"]
 
         if existing_path and not force:
             log.info(
@@ -491,12 +551,19 @@ async def generate_segment(
                 text_modified=False,
             )
 
-        # Resolve voice first so we fail fast before touching status.
-        profile_id = await resolve_voice_for_segment(seg_row, conn=conn)
+        # Resolve voice + engine first so we fail fast before touching status.
+        voice_profile_id, engine = await resolve_voice_for_segment(
+            seg_row, conn=conn
+        )
 
         # Pronunciation substitution.
         merged = merge_pronunciations(project_id)
         text_for_tts, text_changed = apply_pronunciations(seg_row["text"], merged)
+
+        # Prior generation_id (only meaningful on force / regenerate path).
+        prior_gen_id: Optional[str] = None
+        if force and "voicebox_generation_id" in seg_row.keys():
+            prior_gen_id = seg_row["voicebox_generation_id"] or None
 
         # Transition to generating.
         conn.execute(
@@ -506,23 +573,52 @@ async def generate_segment(
         )
 
     # Call Voicebox outside the DB context so we don't hold the connection.
-    settings = get_settings()
-    options = SynthesisOptions(
-        sample_rate=settings.voicebox_output_sample_rate,
-    )
-
     async with _get_semaphore():
-        result: SynthesisResult = await voicebox_client.synthesize(
-            profile_id, text_for_tts, options=options
-        )
+        if force and prior_gen_id:
+            # Regenerate path: reuse Voicebox-side context from the prior attempt.
+            # Fresh /generate wouldn't hurt correctness but loses any sampling
+            # priors Voicebox might preserve across regenerate calls.
+            log.info(
+                "generate_segment %s: using /regenerate on prior gen_id=%s",
+                segment_id, prior_gen_id,
+            )
+            try:
+                audio_bytes, duration_ms, generation_id, content_type = (
+                    await vb.regenerate_and_wait(prior_gen_id)
+                )
+            except VoiceboxError as e:
+                # If regenerate fails (e.g., Voicebox lost the prior attempt),
+                # fall through to a fresh generation so the user isn't stuck.
+                log.warning(
+                    "generate_segment %s: /regenerate on %s failed (%s); "
+                    "falling back to fresh /generate",
+                    segment_id, prior_gen_id, e,
+                )
+                audio_bytes, duration_ms, generation_id, content_type = (
+                    await _do_voicebox_synthesize(
+                        voice_profile_id=voice_profile_id,
+                        engine=engine,
+                        segment_row=seg_row,
+                        text=text_for_tts,
+                    )
+                )
+        else:
+            audio_bytes, duration_ms, generation_id, content_type = (
+                await _do_voicebox_synthesize(
+                    voice_profile_id=voice_profile_id,
+                    engine=engine,
+                    segment_row=seg_row,
+                    text=text_for_tts,
+                )
+            )
 
-    ext = audio_paths.ext_from_content_type(result.content_type)
+    ext = audio_paths.ext_from_content_type(content_type)
     # On regenerate, wipe any stale files with different extensions.
     if force:
         _delete_raw_files(project_id, chapter_id, segment_id)
         _delete_approved_files(project_id, chapter_id, segment_id)
     out_path = audio_paths.raw_segment_path(project_id, chapter_id, segment_id, ext)
-    out_path.write_bytes(result.audio_bytes)
+    out_path.write_bytes(audio_bytes)
 
     rel_path = _repo_rel_path(out_path)
 
@@ -532,10 +628,11 @@ async def generate_segment(
         sets = [
             "audio_path = ?",
             "duration_ms = ?",
+            "voicebox_generation_id = ?",
             "status = 'generated'",
             "updated_at = datetime('now')",
         ]
-        params: list[Any] = [rel_path, result.duration_ms]
+        params: list[Any] = [rel_path, duration_ms, generation_id]
         if force:
             sets.append("approved_at = NULL")
         conn.execute(
@@ -546,10 +643,78 @@ async def generate_segment(
     return GenerationResult(
         segment_id=segment_id,
         audio_path=rel_path,
-        duration_ms=result.duration_ms,
-        sample_rate=result.sample_rate,
-        content_type=result.content_type,
+        duration_ms=duration_ms,
+        sample_rate=get_settings().voicebox_output_sample_rate,
+        content_type=content_type,
         text_modified=text_changed,
+    )
+
+
+async def retry_segment_generation(segment_id: str) -> GenerationResult:
+    """User-initiated retry of a failed generation.
+
+    Requires the segment to have a ``voicebox_generation_id`` (i.e. a
+    prior attempt exists on the Voicebox side). Calls
+    ``POST /generate/{id}/retry`` and awaits completion. On success
+    writes the audio and flips status to ``'generated'`` (same write path
+    as :func:`generate_segment`).
+    """
+    with connect() as conn:
+        seg_row, chapter_id, project_id = _load_segment_context(segment_id, conn)
+        prior_gen_id = (
+            seg_row["voicebox_generation_id"]
+            if "voicebox_generation_id" in seg_row.keys()
+            else None
+        )
+        if not prior_gen_id:
+            raise GenerationError(
+                f"segment {segment_id!r} has no voicebox_generation_id to retry. "
+                "Use /generate instead for a fresh attempt."
+            )
+
+        # Transition to generating so the UI shows the in-flight state.
+        conn.execute(
+            "UPDATE segments SET status='generating', updated_at=datetime('now') "
+            "WHERE id=?",
+            (segment_id,),
+        )
+
+    async with _get_semaphore():
+        audio_bytes, duration_ms, generation_id, content_type = (
+            await vb.retry_and_wait(prior_gen_id)
+        )
+
+    ext = audio_paths.ext_from_content_type(content_type)
+    # Retry wipes raw + approved files just like regenerate.
+    _delete_raw_files(project_id, chapter_id, segment_id)
+    _delete_approved_files(project_id, chapter_id, segment_id)
+    out_path = audio_paths.raw_segment_path(project_id, chapter_id, segment_id, ext)
+    out_path.write_bytes(audio_bytes)
+
+    rel_path = _repo_rel_path(out_path)
+
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE segments SET
+                audio_path = ?,
+                duration_ms = ?,
+                voicebox_generation_id = ?,
+                status = 'generated',
+                approved_at = NULL,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (rel_path, duration_ms, generation_id, segment_id),
+        )
+
+    return GenerationResult(
+        segment_id=segment_id,
+        audio_path=rel_path,
+        duration_ms=duration_ms,
+        sample_rate=get_settings().voicebox_output_sample_rate,
+        content_type=content_type,
+        text_modified=False,
     )
 
 
@@ -583,8 +748,12 @@ async def handle_generate_segment(job: dict[str, Any], payload: Any) -> None:
 
     try:
         result = await generate_segment(segment_id, force=force)
-    except (VoiceboxNotEnabled, VoiceboxUnreachableError, VoiceboxError,
-            NoVoiceResolvedError, VoiceMissingProfileError, GenerationError) as e:
+    except (
+        VoiceboxNotConfigured, VoiceboxNotEnabled, VoiceboxUnreachable,
+        VoiceboxUnreachableError, VoiceboxGenerationError, VoiceboxTimeoutError,
+        VoiceboxModelNotLoaded, VoiceboxError,
+        NoVoiceResolvedError, VoiceMissingProfileError, GenerationError,
+    ) as e:
         # Segment status → 'error'. Keep existing audio_path / duration_ms so
         # the UI can still let the user inspect the last good generation.
         try:
@@ -744,3 +913,117 @@ async def trigger_chapter(
         segment_count=len(job_ids),
         total_estimated_seconds=total_seconds,
     )
+
+
+# ---------------------------------------------------------------------------
+# Retry (user-initiated, against a prior voicebox_generation_id)
+# ---------------------------------------------------------------------------
+
+
+@worker.register_handler(RETRY_JOB_KIND, mode="direct")
+async def handle_retry_segment(job: dict[str, Any], payload: Any) -> None:
+    """Direct-mode handler for ``retry_segment`` jobs.
+
+    Payload: ``{"segment_id": str}``. Delegates to
+    :func:`retry_segment_generation`. Same error-handling contract as
+    :func:`handle_generate_segment`.
+    """
+    job_id = job["id"]
+    if not isinstance(payload, dict):
+        raise GenerationError(
+            f"retry_segment job {job_id} has invalid payload {payload!r}"
+        )
+    segment_id = payload.get("segment_id")
+    if not segment_id:
+        raise GenerationError(
+            f"retry_segment job {job_id} payload missing segment_id"
+        )
+
+    try:
+        result = await retry_segment_generation(segment_id)
+    except (
+        VoiceboxNotConfigured, VoiceboxNotEnabled, VoiceboxUnreachable,
+        VoiceboxUnreachableError, VoiceboxGenerationError, VoiceboxTimeoutError,
+        VoiceboxModelNotLoaded, VoiceboxError,
+        NoVoiceResolvedError, VoiceMissingProfileError, GenerationError,
+    ) as e:
+        try:
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE segments SET status='error', updated_at=datetime('now') "
+                    "WHERE id = ?",
+                    (segment_id,),
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("failed to flip segment %s to error status", segment_id)
+        repo.set_status(
+            job_id, "failed", error=f"{type(e).__name__}: {e}",
+            message=f"segment {segment_id} retry: {e}",
+        )
+        log.warning("retry_segment job %s failed: %s", job_id, e)
+        return
+
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT chapter_id FROM segments WHERE id = ?",
+                (result.segment_id,),
+            ).fetchone()
+        if row:
+            from backend.audio import assembly as _assembly  # noqa: WPS433
+            _assembly.invalidate_chapter_cache(row["chapter_id"])
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "handle_retry_segment: cache invalidation failed for %s",
+            result.segment_id,
+        )
+
+    repo.set_status(
+        job_id,
+        "complete",
+        result={
+            "segment_id": result.segment_id,
+            "audio_path": result.audio_path,
+            "duration_ms": result.duration_ms,
+            "text_modified": result.text_modified,
+        },
+        message=(
+            f"retried {result.segment_id} ({result.duration_ms}ms)"
+            if result.duration_ms is not None
+            else f"retried {result.segment_id}"
+        ),
+    )
+
+
+async def trigger_retry_segment(segment_id: str) -> TriggerResult:
+    """Enqueue a ``retry_segment`` job for a segment with a prior
+    ``voicebox_generation_id``.
+
+    Unlike :func:`trigger_segment` with ``force=True``, this does **not**
+    wipe audio files synchronously — the retry may succeed or fail, and
+    clobbering the prior (possibly still-listenable) file up-front is
+    unhelpful. Files are wiped inside :func:`retry_segment_generation`
+    right before the new audio is written, on success.
+    """
+    with connect() as conn:
+        seg_row, _chapter_id, project_id = _load_segment_context(segment_id, conn)
+        prior_gen_id = (
+            seg_row["voicebox_generation_id"]
+            if "voicebox_generation_id" in seg_row.keys()
+            else None
+        )
+        if not prior_gen_id:
+            raise GenerationError(
+                f"segment {segment_id!r} has no prior voicebox_generation_id; "
+                "use /generate for a fresh attempt."
+            )
+        est = estimate_segment_duration(segment_id, conn=conn)
+
+    job = repo.create_job(
+        project_id=project_id,
+        kind=RETRY_JOB_KIND,
+        payload={"segment_id": segment_id},
+        status="queued",
+        message=f"Retry segment {segment_id}",
+    )
+    return TriggerResult(job_id=job["id"], estimated_seconds=est.seconds)

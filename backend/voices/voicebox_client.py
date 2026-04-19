@@ -989,37 +989,31 @@ _TERMINAL_FAIL = {"failed", "error", "errored"}
 _TERMINAL_CANCELLED = {"cancelled", "canceled"}
 
 
-async def generate_and_wait(
+async def _await_and_download(
+    generation_id: str,
     *,
-    profile_id: str,
-    text: str,
-    engine: Optional[str] = None,
-    options: Optional[dict[str, Any]] = None,
     poll_interval: float = 0.5,
     timeout: Optional[float] = None,
 ) -> tuple[bytes, Optional[int], str, Optional[str]]:
-    """Kick off a generation, poll until terminal, then fetch audio.
+    """Poll ``generation_id`` until terminal, then download audio.
 
-    Returns ``(audio_bytes, duration_ms, generation_id, content_type)``.
+    Shared by :func:`generate_and_wait`, :func:`regenerate_and_wait`,
+    and :func:`retry_and_wait`. Returns
+    ``(audio_bytes, duration_ms, generation_id, content_type)``.
 
-    Raises :class:`VoiceboxGenerationError` on ``status=failed``, and
-    :class:`VoiceboxTimeoutError` when ``timeout`` elapses before a
-    terminal state. On timeout the generation remains on Voicebox so
-    the caller can retry / poll later.
+    Raises :class:`VoiceboxGenerationError` on ``status=failed`` /
+    cancelled, and :class:`VoiceboxTimeoutError` when ``timeout``
+    elapses before a terminal state. On timeout the generation remains
+    on Voicebox so the caller can retry / poll later.
     """
-    if timeout is None:
-        timeout = float(get_settings().voicebox_generation_timeout_seconds)
-
-    started = await generate(
-        profile_id=profile_id, text=text, engine=engine, options=options
-    )
-    generation_id = started.generation_id
     if not generation_id:
         raise VoiceboxAPIError(
-            f"generate returned no id: {started!r}",
+            f"_await_and_download called with empty generation_id",
             status_code=0,
-            body=repr(started),
+            body="",
         )
+    if timeout is None:
+        timeout = float(get_settings().voicebox_generation_timeout_seconds)
 
     loop = asyncio.get_event_loop()
     deadline = loop.time() + float(timeout)
@@ -1050,6 +1044,78 @@ async def generate_and_wait(
 
     audio_bytes, content_type = await get_generation_audio(generation_id)
     return audio_bytes, last.duration_ms, generation_id, content_type
+
+
+async def generate_and_wait(
+    *,
+    profile_id: str,
+    text: str,
+    engine: Optional[str] = None,
+    options: Optional[dict[str, Any]] = None,
+    poll_interval: float = 0.5,
+    timeout: Optional[float] = None,
+) -> tuple[bytes, Optional[int], str, Optional[str]]:
+    """Kick off a generation, poll until terminal, then fetch audio.
+
+    Returns ``(audio_bytes, duration_ms, generation_id, content_type)``.
+
+    Raises :class:`VoiceboxGenerationError` on ``status=failed``, and
+    :class:`VoiceboxTimeoutError` when ``timeout`` elapses before a
+    terminal state. On timeout the generation remains on Voicebox so
+    the caller can retry / poll later.
+    """
+    started = await generate(
+        profile_id=profile_id, text=text, engine=engine, options=options
+    )
+    generation_id = started.generation_id
+    if not generation_id:
+        raise VoiceboxAPIError(
+            f"generate returned no id: {started!r}",
+            status_code=0,
+            body=repr(started),
+        )
+    return await _await_and_download(
+        generation_id, poll_interval=poll_interval, timeout=timeout
+    )
+
+
+async def regenerate_and_wait(
+    generation_id: str,
+    *,
+    poll_interval: float = 0.5,
+    timeout: Optional[float] = None,
+) -> tuple[bytes, Optional[int], str, Optional[str]]:
+    """POST ``/generate/{id}/regenerate`` then await completion + download.
+
+    Returns the same shape as :func:`generate_and_wait`. The returned
+    generation_id may be the same as the input (Voicebox reuses the id
+    for the new attempt) or a new one — callers should use whatever
+    Voicebox reports.
+    """
+    started = await regenerate(generation_id)
+    new_gid = started.generation_id or generation_id
+    return await _await_and_download(
+        new_gid, poll_interval=poll_interval, timeout=timeout
+    )
+
+
+async def retry_and_wait(
+    generation_id: str,
+    *,
+    poll_interval: float = 0.5,
+    timeout: Optional[float] = None,
+) -> tuple[bytes, Optional[int], str, Optional[str]]:
+    """POST ``/generate/{id}/retry`` then await completion + download.
+
+    Intended for resuming a prior attempt that failed on the Voicebox
+    side (e.g., transient model hiccup). Returns the same shape as
+    :func:`generate_and_wait`.
+    """
+    started = await retry_generation(generation_id)
+    new_gid = started.generation_id or generation_id
+    return await _await_and_download(
+        new_gid, poll_interval=poll_interval, timeout=timeout
+    )
 
 
 # ---------------------------------------------------------------------------

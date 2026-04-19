@@ -129,10 +129,40 @@ async def regenerate_segment_endpoint(segment_id: str) -> GenerationTriggerOut:
     """Force regeneration: wipes raw + approved files and ``approved_at``
     synchronously, then enqueues a new job. This is destructive — if the user
     wants to preserve the old approved cut, they should copy it out first.
+
+    The handler routes to Voicebox's ``POST /generate/{id}/regenerate``
+    when the segment has a prior ``voicebox_generation_id``, preserving
+    sampling context on the Voicebox side; otherwise falls back to a
+    fresh ``/generate``.
     """
     _, chapter_id = _segment_context(segment_id)
     try:
         result = await generation.trigger_segment(segment_id, force=True)
+    except generation.GenerationError as e:
+        raise HTTPException(400, str(e)) from e
+    from backend.audio import assembly  # noqa: WPS433 — intentional late import
+    assembly.invalidate_chapter_cache(chapter_id)
+    return GenerationTriggerOut(
+        job_id=result.job_id, estimated_seconds=result.estimated_seconds
+    )
+
+
+@router.post(
+    "/segments/{segment_id}/retry",
+    response_model=GenerationTriggerOut,
+    status_code=202,
+)
+async def retry_segment_endpoint(segment_id: str) -> GenerationTriggerOut:
+    """Retry a prior failed Voicebox generation via ``POST /generate/{id}/retry``.
+
+    Requires the segment to have a ``voicebox_generation_id`` (i.e. a
+    prior attempt exists on the Voicebox side). Returns 400 if the
+    segment has no prior attempt — the caller should use ``/generate``
+    instead.
+    """
+    _, chapter_id = _segment_context(segment_id)
+    try:
+        result = await generation.trigger_retry_segment(segment_id)
     except generation.GenerationError as e:
         raise HTTPException(400, str(e)) from e
     from backend.audio import assembly  # noqa: WPS433 — intentional late import

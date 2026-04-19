@@ -182,6 +182,9 @@ export interface Segment {
   /** Phase-5: ISO-8601 UTC timestamp set when the segment is approved;
    * null once rejected or while still in pending/generating/generated/error. */
   approved_at?: string | null;
+  /** Phase-5R v8: Voicebox generation id tracked across regenerate/retry
+   * so the UI can call /segments/:id/retry against the prior attempt. */
+  voicebox_generation_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -740,6 +743,16 @@ export const api = {
   regenerateSegment: (segmentId: string) =>
     request<GenerationTriggerResult>(
       `/api/segments/${segmentId}/regenerate`,
+      { method: "POST" },
+    ),
+
+  /** Phase-5R Commit 4: retry a failed Voicebox generation by
+   * POST /generate/{id}/retry against the segment's prior
+   * voicebox_generation_id. Returns 400 if the segment has no prior
+   * attempt — caller should fall back to generateSegment in that case. */
+  retrySegment: (segmentId: string) =>
+    request<GenerationTriggerResult>(
+      `/api/segments/${segmentId}/retry`,
       { method: "POST" },
     ),
 

@@ -59,6 +59,7 @@ def _row_to_segment(row, character_row: Optional[Any]) -> SegmentOut:
         duration_ms=d.get("duration_ms"),
         status=d.get("status", "pending"),
         text_modified=bool(d.get("text_modified") or 0),
+        voicebox_generation_id=d.get("voicebox_generation_id"),
         created_at=d["created_at"],
         updated_at=d["updated_at"],
     )
